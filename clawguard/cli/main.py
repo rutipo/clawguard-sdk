@@ -128,6 +128,7 @@ def create_user(
         console.print("\n[green]Account created![/green]")
         console.print(f"Email: {email}")
         console.print(f"API Key: [bold]{api_key}[/bold]")
+        console.print("[yellow]This key is shown only once. Copy it and store it somewhere safe.[/yellow]")
         console.print(f"\nKey saved to {CONFIG_FILE}")
         console.print("\nNext: connect Telegram with [bold]clawguard connect-telegram[/bold]")
 
