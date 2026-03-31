@@ -1,0 +1,445 @@
+/**
+ * ClawGuard monitoring plugin for OpenClaw.
+ *
+ * Hooks into OpenClaw's tool execution lifecycle to capture every tool call,
+ * detect sensitive content, and stream events to the ClawGuard backend for
+ * real-time Telegram commentary and risk analysis.
+ *
+ * Installation:
+ *   openclaw plugins install @clawguard/openclaw-plugin
+ *
+ * Configuration (openclaw config):
+ *   plugins:
+ *     @clawguard/openclaw-plugin:
+ *       backendUrl: "https://clawguard.example.com"
+ *       apiKey: "cg_..."
+ *       agentId: "my-research-bot"
+ */
+
+import { randomUUID } from "node:crypto";
+import { ClawGuardClient } from "./client.js";
+import {
+  detectSensitiveContent,
+  isHighRiskTool,
+  isSensitivePath,
+} from "./sensitive.js";
+import type {
+  ClawGuardPluginConfig,
+  EventPayload,
+  HookContext,
+  HookDecision,
+  OpenClawPluginApi,
+} from "./types.js";
+import { DEFAULT_CONFIG } from "./types.js";
+
+/** Active session tracking. */
+interface ActiveSession {
+  sessionId: string;
+  agentId: string;
+  task: string;
+  startedAt: number;
+  toolCallCount: number;
+  recentOutputs: Array<{ toolName: string; outputPrefix: string }>;
+  sensitiveAccessed: boolean;
+}
+
+/** Per-session-key tracking of active sessions. */
+const sessions = new Map<string, ActiveSession>();
+
+let client: ClawGuardClient;
+let pluginConfig: ClawGuardPluginConfig;
+
+/**
+ * Resolve a session for a given context, creating one if needed.
+ */
+async function resolveSession(ctx: HookContext): Promise<ActiveSession> {
+  const key = ctx.sessionKey || "main";
+
+  let session = sessions.get(key);
+  if (session) return session;
+
+  // Create a new session
+  const agentId = ctx.agentId || pluginConfig.agentId;
+  const task = ""; // Task isn't known until first user message
+  const sessionId = await client.startSession(agentId, task);
+
+  session = {
+    sessionId,
+    agentId,
+    task,
+    startedAt: Date.now(),
+    toolCallCount: 0,
+    recentOutputs: [],
+    sensitiveAccessed: false,
+  };
+  sessions.set(key, session);
+
+  // Log session_start event
+  await client.sendEventImmediate(
+    makeEvent(session, "session_start", {
+      agent_id: agentId,
+      task,
+    }),
+  );
+
+  return session;
+}
+
+/**
+ * Build an EventPayload.
+ */
+function makeEvent(
+  session: ActiveSession,
+  eventType: EventPayload["event_type"],
+  data: Record<string, unknown>,
+  riskFlags: string[] = [],
+): EventPayload {
+  return {
+    event_id: randomUUID(),
+    session_id: session.sessionId,
+    agent_id: session.agentId,
+    event_type: eventType,
+    timestamp: new Date().toISOString(),
+    data,
+    risk_flags: riskFlags,
+  };
+}
+
+/**
+ * Truncate a string for summary fields.
+ */
+function truncate(text: unknown, maxLen: number): string {
+  const s = String(text ?? "");
+  return s.length > maxLen ? s.slice(0, maxLen) + "..." : s;
+}
+
+/**
+ * Handle before_tool_call hook.
+ * Captures tool call data, detects sensitive access, optionally blocks.
+ */
+async function handleBeforeToolCall(
+  ctx: HookContext,
+): Promise<HookDecision | void> {
+  const session = await resolveSession(ctx);
+  const toolName = ctx.tool || "unknown";
+  const toolArgs = ctx.args || {};
+  session.toolCallCount++;
+
+  // Build risk flags
+  const riskFlags: string[] = [];
+
+  // Check for sensitive file path in args
+  const pathArg =
+    (toolArgs.path as string) ||
+    (toolArgs.file as string) ||
+    (toolArgs.filename as string) ||
+    "";
+  if (pathArg && isSensitivePath(pathArg)) {
+    riskFlags.push("sensitive_path");
+  }
+
+  // Check for sensitive content in input
+  const inputStr = JSON.stringify(toolArgs);
+  const sensitiveInput = detectSensitiveContent(inputStr);
+  if (sensitiveInput.length > 0) {
+    riskFlags.push("sensitive_input");
+  }
+
+  // Check for high-risk tool
+  if (isHighRiskTool(toolName)) {
+    riskFlags.push("high_risk_tool");
+
+    // If agent previously accessed sensitive content and is now making
+    // an outbound request, flag potential exfiltration
+    if (session.sensitiveAccessed) {
+      riskFlags.push("potential_exfiltration");
+    }
+  }
+
+  // Build event data
+  const data: Record<string, unknown> = {
+    tool_name: toolName,
+    input_summary: truncate(inputStr, 200),
+  };
+
+  if (pluginConfig.captureFullIo) {
+    data.full_input = truncate(inputStr, pluginConfig.maxFullIoBytes);
+  }
+
+  if (pathArg) {
+    data.target = pathArg;
+  }
+
+  if (sensitiveInput.length > 0) {
+    data.sensitive_patterns = sensitiveInput;
+  }
+
+  // Send tool_call event (immediate for alerts, batched otherwise)
+  const event = makeEvent(session, "tool_call", data, riskFlags);
+
+  if (riskFlags.length > 0) {
+    await client.sendEventImmediate(event);
+  } else {
+    client.queueEvent(event);
+  }
+
+  // Optionally block sensitive access
+  if (
+    pluginConfig.blockSensitiveAccess &&
+    riskFlags.includes("sensitive_path")
+  ) {
+    return { block: true };
+  }
+
+  // Optionally require approval for high-risk + exfiltration
+  if (
+    pluginConfig.requireApprovalForHighRisk &&
+    riskFlags.includes("potential_exfiltration")
+  ) {
+    return { requireApproval: true };
+  }
+}
+
+/**
+ * Handle tool result (after tool execution).
+ * We register this as a separate hook that fires after the tool completes.
+ */
+function handleToolResult(
+  session: ActiveSession,
+  toolName: string,
+  result: unknown,
+  durationMs?: number,
+): void {
+  const outputStr = String(result ?? "");
+  const riskFlags: string[] = [];
+
+  // Detect sensitive content in output
+  const sensitiveOutput = detectSensitiveContent(outputStr);
+  if (sensitiveOutput.length > 0) {
+    riskFlags.push("sensitive_output");
+    session.sensitiveAccessed = true;
+  }
+
+  // Check file path in output
+  if (isSensitivePath(toolName)) {
+    session.sensitiveAccessed = true;
+  }
+
+  // Track recent outputs for data flow analysis
+  session.recentOutputs.push({
+    toolName,
+    outputPrefix: outputStr.slice(0, 500),
+  });
+  // Keep only last 10
+  if (session.recentOutputs.length > 10) {
+    session.recentOutputs.shift();
+  }
+
+  // Build event data
+  const data: Record<string, unknown> = {
+    tool_name: toolName,
+    output_summary: truncate(outputStr, 300),
+    output_size_bytes: outputStr.length,
+  };
+
+  if (durationMs !== undefined) {
+    data.duration_ms = durationMs;
+  }
+
+  if (sensitiveOutput.length > 0) {
+    data.sensitive = true;
+    data.sensitive_patterns = sensitiveOutput;
+  }
+
+  if (pluginConfig.captureFullIo) {
+    data.full_output = truncate(outputStr, pluginConfig.maxFullIoBytes);
+  }
+
+  const event = makeEvent(session, "tool_output", data, riskFlags);
+
+  if (riskFlags.length > 0) {
+    client.sendEventImmediate(event).catch((err) => {
+      console.error("[clawguard] send error:", err.message);
+    });
+  } else {
+    client.queueEvent(event);
+  }
+}
+
+/**
+ * Handle message_sending hook.
+ * Captures agent responses being sent to channels.
+ */
+async function handleMessageSending(
+  ctx: HookContext,
+): Promise<HookDecision | void> {
+  const session = await resolveSession(ctx);
+  const message = ctx.message || "";
+  const channel = ctx.channel || "unknown";
+
+  // Detect sensitive content in outgoing message
+  const sensitive = detectSensitiveContent(message);
+  const riskFlags: string[] = [];
+
+  if (sensitive.length > 0) {
+    riskFlags.push("sensitive_in_response");
+  }
+
+  const data: Record<string, unknown> = {
+    direction: "outbound",
+    channel,
+    content_preview: truncate(message, 200),
+    content_length: message.length,
+  };
+
+  if (sensitive.length > 0) {
+    data.sensitive = true;
+    data.sensitive_patterns = sensitive;
+  }
+
+  const event = makeEvent(session, "action", data, riskFlags);
+
+  if (riskFlags.length > 0) {
+    await client.sendEventImmediate(event);
+  } else {
+    client.queueEvent(event);
+  }
+}
+
+/**
+ * End a session and clean up.
+ */
+async function endSessionForKey(
+  key: string,
+  status: "completed" | "aborted" = "completed",
+): Promise<void> {
+  const session = sessions.get(key);
+  if (!session) return;
+
+  // Log session_end event
+  const durationSeconds = (Date.now() - session.startedAt) / 1000;
+  await client.sendEventImmediate(
+    makeEvent(session, "session_end", {
+      status,
+      duration_seconds: durationSeconds,
+      tool_call_count: session.toolCallCount,
+    }),
+  );
+
+  // End session on backend (triggers metrics computation)
+  try {
+    await client.endSession(session.sessionId, status);
+  } catch (err) {
+    console.error("[clawguard] end session error:", (err as Error).message);
+  }
+
+  sessions.delete(key);
+}
+
+// --- Plugin entry point ---
+
+/**
+ * Load plugin configuration from OpenClaw config or environment.
+ */
+function loadConfig(api: OpenClawPluginApi): ClawGuardPluginConfig {
+  const config = { ...DEFAULT_CONFIG };
+
+  // Try OpenClaw plugin config
+  const rt = api.runtime?.config;
+  if (rt) {
+    const backendUrl = rt.get("backendUrl");
+    if (typeof backendUrl === "string") config.backendUrl = backendUrl;
+
+    const apiKey = rt.get("apiKey");
+    if (typeof apiKey === "string") config.apiKey = apiKey;
+
+    const agentId = rt.get("agentId");
+    if (typeof agentId === "string") config.agentId = agentId;
+
+    const captureFullIo = rt.get("captureFullIo");
+    if (typeof captureFullIo === "boolean") config.captureFullIo = captureFullIo;
+
+    const blockSensitive = rt.get("blockSensitiveAccess");
+    if (typeof blockSensitive === "boolean")
+      config.blockSensitiveAccess = blockSensitive;
+
+    const requireApproval = rt.get("requireApprovalForHighRisk");
+    if (typeof requireApproval === "boolean")
+      config.requireApprovalForHighRisk = requireApproval;
+  }
+
+  // Environment variable overrides
+  if (process.env.CLAWGUARD_BACKEND_URL) {
+    config.backendUrl = process.env.CLAWGUARD_BACKEND_URL;
+  }
+  if (process.env.CLAWGUARD_API_KEY) {
+    config.apiKey = process.env.CLAWGUARD_API_KEY;
+  }
+  if (process.env.CLAWGUARD_AGENT_ID) {
+    config.agentId = process.env.CLAWGUARD_AGENT_ID;
+  }
+
+  return config;
+}
+
+/**
+ * OpenClaw plugin registration entry point.
+ */
+export function register(api: OpenClawPluginApi): void {
+  pluginConfig = loadConfig(api);
+
+  if (!pluginConfig.apiKey) {
+    console.warn(
+      "[clawguard] No API key configured. Set CLAWGUARD_API_KEY or configure in plugin settings.",
+    );
+    return;
+  }
+
+  console.log(
+    `[clawguard] Monitoring active - backend: ${pluginConfig.backendUrl}, agent: ${pluginConfig.agentId}`,
+  );
+
+  // Initialize HTTP client
+  client = new ClawGuardClient(pluginConfig);
+  client.start();
+
+  // Hook into tool execution lifecycle
+  api.registerHook("before_tool_call", async (ctx: HookContext) => {
+    try {
+      return await handleBeforeToolCall(ctx);
+    } catch (err) {
+      // Never let monitoring errors break agent execution
+      console.error("[clawguard] before_tool_call error:", (err as Error).message);
+    }
+  });
+
+  // Hook into message sending
+  api.registerHook("message_sending", async (ctx: HookContext) => {
+    try {
+      return await handleMessageSending(ctx);
+    } catch (err) {
+      console.error("[clawguard] message_sending error:", (err as Error).message);
+    }
+  });
+
+  // Register cleanup as a background service
+  api.registerBackgroundService("clawguard-monitor", {
+    async start() {
+      // Client already started above
+    },
+    async stop() {
+      // End all active sessions
+      for (const key of sessions.keys()) {
+        await endSessionForKey(key, "completed").catch(() => {});
+      }
+      await client.stop();
+      console.log("[clawguard] Monitoring stopped, events flushed.");
+    },
+  });
+}
+
+// Export for direct usage / testing
+export { ClawGuardClient } from "./client.js";
+export { detectSensitiveContent, isHighRiskTool, isSensitivePath } from "./sensitive.js";
+export type { ClawGuardPluginConfig, EventPayload } from "./types.js";
+export { DEFAULT_CONFIG } from "./types.js";
