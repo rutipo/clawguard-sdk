@@ -42,6 +42,9 @@ clawguard = "clawguard.cli.main:app"
 Homepage = "https://github.com/rutipo/clawguard-sdk"
 Issues = "https://github.com/rutipo/clawguard-sdk/issues"
 
+[tool.hatch.build.targets.wheel]
+packages = ["clawguard"]
+
 [tool.ruff]
 target-version = "py311"
 line-length = 100

@@ -61,7 +61,7 @@ def connect_telegram() -> None:
     code = secrets.token_hex(3).upper()  # 6-char hex code
 
     console.print(f"\n[bold]Your connection code: {code}[/bold]")
-    console.print("Send this to the ClawGuard Telegram bot:")
+    console.print("Open Telegram, search for [bold]@clawguard_alerts_bot[/bold], and send:")
     console.print(f"  /connect {code}\n")
 
     try:
