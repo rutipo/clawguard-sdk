@@ -58,6 +58,8 @@ export interface OpenClawPluginApi {
   runtime?: PluginRuntime;
   /** Scoped logger */
   logger?: { debug(...args: unknown[]): void; info(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void };
+  /** Registration mode: "full", "setup-only", "setup-runtime", or "cli-metadata" */
+  registrationMode?: string;
 }
 
 export interface HookHandler {

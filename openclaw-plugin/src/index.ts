@@ -377,6 +377,11 @@ export default definePluginEntry({
   name: "ClawGuard Monitor",
   description: "Security monitoring for OpenClaw agents — detects risky behavior and sends Telegram alerts",
   register(api) {
+    // Only fully initialize in "full" registration mode
+    if (api.registrationMode && api.registrationMode !== "full") {
+      return;
+    }
+
     pluginConfig = loadConfig(api);
 
     if (!pluginConfig.apiKey) {
