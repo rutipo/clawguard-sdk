@@ -50,7 +50,6 @@ export interface SessionEndRequest {
 
 export interface OpenClawPluginApi {
   registerHook(event: string, handler: HookHandler): void;
-  registerBackgroundService(name: string, service: BackgroundService): void;
   /** Plugin-specific config from plugins.entries.<id>.config */
   pluginConfig: Record<string, unknown>;
   /** Full OpenClaw config snapshot */

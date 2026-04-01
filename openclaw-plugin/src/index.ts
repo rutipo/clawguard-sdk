@@ -413,19 +413,13 @@ export default definePluginEntry({
       }
     });
 
-    // Register cleanup as a background service
-    api.registerBackgroundService("clawguard-monitor", {
-      async start() {
-        // Client already started above
-      },
-      async stop() {
-        // End all active sessions
-        for (const key of sessions.keys()) {
-          await endSessionForKey(key, "completed").catch(() => {});
-        }
-        await client.stop();
-        console.log("[clawguard] Monitoring stopped, events flushed.");
-      },
+    // Clean up on process exit
+    process.on("beforeExit", async () => {
+      for (const key of sessions.keys()) {
+        await endSessionForKey(key, "completed").catch(() => {});
+      }
+      await client.stop();
+      console.log("[clawguard] Monitoring stopped, events flushed.");
     });
   },
 });
