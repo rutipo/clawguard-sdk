@@ -31,6 +31,8 @@ export class ClawGuardClient {
         console.error("[clawguard] flush error:", err.message);
       });
     }, this.config.flushIntervalMs);
+    // Don't let the timer prevent the process from exiting
+    this.flushTimer.unref();
   }
 
   /** Stop the timer and flush remaining events. */
