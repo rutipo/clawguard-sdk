@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ClawGuardClient } from "../src/client.js";
-import type { ClawGuardPluginConfig, EventPayload } from "../src/types.js";
-import { DEFAULT_CONFIG } from "../src/types.js";
+import { ClawGuardClient } from "../../openclaw-plugin/src/client.js";
+import type { ClawGuardPluginConfig, EventPayload } from "../../openclaw-plugin/src/types.js";
+import { DEFAULT_CONFIG } from "../../openclaw-plugin/src/types.js";
 
 // Mock fetch globally
 const mockFetch = vi.fn();

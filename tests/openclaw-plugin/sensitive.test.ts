@@ -3,7 +3,7 @@ import {
   detectSensitiveContent,
   isHighRiskTool,
   isSensitivePath,
-} from "../src/sensitive.js";
+} from "../../openclaw-plugin/src/sensitive.js";
 
 describe("detectSensitiveContent", () => {
   it("detects AWS access keys", () => {

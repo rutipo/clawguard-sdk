@@ -22,7 +22,7 @@ describe("register()", () => {
     delete process.env.CLAWGUARD_API_KEY;
     delete process.env.CLAWGUARD_BACKEND_URL;
 
-    const mod = await import("../src/index.js");
+    const mod = await import("../../openclaw-plugin/src/index.js");
 
     const api = {
       registerHook: vi.fn(),
@@ -53,7 +53,7 @@ describe("plugin hooks (with API key)", () => {
 
     // Dynamic import to pick up env changes
     vi.resetModules();
-    const mod = await import("../src/index.js");
+    const mod = await import("../../openclaw-plugin/src/index.js");
 
     const api = {
       registerHook: vi.fn((event: string, handler: Function) => {

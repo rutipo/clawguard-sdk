@@ -17,8 +17,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run --dir ../tests/openclaw-plugin",
+    "test:watch": "vitest --dir ../tests/openclaw-plugin"
   },
   "keywords": [
     "openclaw",
