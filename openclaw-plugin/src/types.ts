@@ -2,7 +2,7 @@
  * Type definitions for ClawGuard OpenClaw plugin.
  *
  * These mirror the ClawGuard backend API schemas and the
- * OpenClaw plugin SDK interfaces we hook into.
+ * OpenClaw plugin interfaces we hook into.
  */
 
 // --- ClawGuard API types ---
@@ -46,7 +46,7 @@ export interface SessionEndRequest {
   status: "active" | "completed" | "aborted";
 }
 
-// --- OpenClaw plugin SDK types (minimal subset we use) ---
+// --- OpenClaw plugin types (minimal subset we use) ---
 
 export interface OpenClawPluginApi {
   registerHook(event: string, handler: HookHandler): void;

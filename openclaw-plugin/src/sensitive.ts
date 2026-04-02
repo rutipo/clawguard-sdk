@@ -1,5 +1,5 @@
 /**
- * Sensitive content detection - mirrors clawguard/sdk/sensitive.py
+ * Sensitive content detection - mirrors clawguard/monitor/sensitive.py
  *
  * Detects credentials, API keys, PII, and other sensitive patterns
  * in tool inputs and outputs.
