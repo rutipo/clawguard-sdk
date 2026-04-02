@@ -1,213 +1,127 @@
-# ClawGuard SDK
+# ClawGuard
 
-Python SDK for **ClawGuard** — real-time security monitoring for AI agents. Wraps your agent's tool calls, detects risky behavior (data exfiltration, prompt injection, credential access), and sends alerts to Telegram.
+> **This is the public distribution repo.** It contains the OpenClaw plugin that users install on their machines to connect to the ClawGuard monitoring service. The backend, analysis engine, and Telegram bot are in the private [`rutipo/ClawGuard`](https://github.com/rutipo/ClawGuard) repository and are never distributed to users.
 
-> **This is the public distribution repo.** It contains only the client-side SDK, CLI, and OpenClaw plugin — the code users install on their OpenClaw machines to connect to the ClawGuard monitoring service. The backend, analysis engine, and Telegram bot are in the private [`rutipo/ClawGuard`](https://github.com/rutipo/ClawGuard) repository and are never distributed to users.
+Security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw) agents. Hooks into the tool execution lifecycle to capture every tool call, detect sensitive content, and stream events to the ClawGuard backend for real-time Telegram alerts and analysis.
 
 ## How It Works
 
 ```
-Your Python Agent                    ClawGuard Backend
-+------------------+                +---------------------+
-|  Agent code      |                |  FastAPI + Postgres  |
-|  + ClawGuard SDK |--- HTTPS --->  |  Analysis Engine     |
-|  (wraps tools)   |                |  Telegram Bot -----> alerts
-+------------------+                +---------------------+
+OpenClaw Agent                     ClawGuard Backend
++---------------------+           +---------------------------+
+|  OpenClaw (Node.js)  |          |  ClawGuard Backend (Py)   |
+|   + ClawGuard plugin |--HTTPS-->|  FastAPI + PostgreSQL     |
+|     (TypeScript)     |          |       |                   |
++---------------------+           |  Analysis Engine          |
+                                  |       |                   |
+                                  |  Telegram Bot --> alerts  |
+                                  +---------------------------+
 ```
 
-The SDK intercepts every tool call your agent makes, captures structured events (what tool, what input, what output, timing), runs local risk checks, and streams everything to the ClawGuard backend for analysis. You get real-time Telegram alerts when something looks wrong.
+The plugin intercepts every tool call and outbound message via OpenClaw's `before_tool_call` and `message_sending` hooks. Events are streamed to the ClawGuard backend for risk analysis and Telegram commentary.
 
 ## Installation
 
 ```bash
-pip install clawguard-sdk
+openclaw plugins install clawguard-monitor
 ```
 
-With CLI tools (for account setup):
+Or install from source:
 
 ```bash
-pip install "clawguard-sdk[cli]"
-```
-
-## Quick Start
-
-### 1. Get an Account
-
-You need a ClawGuard backend running (self-hosted or managed). Then register:
-
-```bash
-# Create your account (saves API key locally)
-clawguard create-user --email you@example.com --backend-url https://your-server:8000
-```
-
-This gives you an API key (`cg_...`) and saves it to `~/.clawguard/config.json`.
-
-Or register via the API directly:
-
-```bash
-curl -X POST https://your-server:8000/v1/register \
-  -H "Content-Type: application/json" \
-  -d '{"email": "you@example.com"}'
-```
-
-### 2. Connect Telegram (optional, recommended)
-
-To receive real-time alerts on your phone:
-
-1. Find the ClawGuard bot on Telegram (your server admin will share the bot name)
-2. Run:
-   ```bash
-   clawguard connect-telegram
-   ```
-3. Send the displayed code to the bot: `/connect <CODE>`
-
-### 3. Instrument Your Agent
-
-```python
-from clawguard import secure_run
-
-# Your existing agent (any object with a .run() method and .tools)
-result = secure_run(agent, task="Summarize Q4 financial reports")
-```
-
-That's it. Every tool call is now monitored.
-
-## Usage
-
-### Basic: `secure_run`
-
-The simplest API — wraps and runs your agent in one call:
-
-```python
-from clawguard import secure_run
-
-result = secure_run(
-    agent,
-    task="Research competitor pricing",
-)
-```
-
-### Context Manager: `clawguard_context`
-
-For more control (multiple tasks in one session, custom events):
-
-```python
-from clawguard.sdk.runner import clawguard_context
-
-with clawguard_context(agent) as guard:
-    result1 = guard.run("Find pricing data")
-    result2 = guard.run("Summarize findings")
-```
-
-### Manual Event Logging
-
-Log custom decision points from within your agent code:
-
-```python
-from clawguard.sdk.runner import capture_decision
-
-# Inside your agent's logic
-capture_decision(
-    "Decided to access production database instead of staging",
-    metadata={"reason": "staging data is stale"}
-)
-```
-
-### Wrapping Individual Tools
-
-For fine-grained control, wrap specific tools:
-
-```python
-from clawguard.sdk.wrappers import wrap_tool
-from clawguard.sdk.logger import EventLogger
-from clawguard.sdk.risk_engine import SessionRiskContext
-
-event_logger = EventLogger(session_id="my-session", config=config)
-event_logger.start()
-
-my_safe_tool = wrap_tool(
-    original_tool_fn,
-    tool_name="web_search",
-    event_logger=event_logger,
-    risk_ctx=SessionRiskContext(session_id="my-session"),
-)
+git clone https://github.com/rutipo/clawguard-sdk.git
+cd clawguard-sdk/openclaw-plugin
+npm install && npm run build
+openclaw plugins link .
 ```
 
 ## Configuration
 
-Set via environment variables or pass a `ClawGuardConfig` object:
+Add to your OpenClaw config (`~/.openclaw/config.json` or equivalent):
 
-```python
-from clawguard import ClawGuardConfig, secure_run
-
-config = ClawGuardConfig(
-    api_key="cg_your_key_here",
-    backend_url="https://your-server:8000",
-    enabled=True,
-)
-
-result = secure_run(agent, task="...", config=config)
+```json
+{
+  "plugins": {
+    "clawguard-monitor": {
+      "backendUrl": "https://your-clawguard-server.com",
+      "apiKey": "cg_your_api_key_here",
+      "agentId": "my-research-bot"
+    }
+  }
+}
 ```
 
-### Environment Variables
+Or use environment variables:
 
-| Variable | Default | Description |
-|---|---|---|
-| `CLAWGUARD_API_KEY` | `""` | Your API key |
-| `CLAWGUARD_BACKEND_URL` | `http://localhost:8000` | Backend server URL |
-| `CLAWGUARD_ENABLED` | `true` | Enable/disable monitoring |
-| `CLAWGUARD_LOG_TO_STDERR` | `true` | Log events to stderr |
-| `CLAWGUARD_CAPTURE_FULL_IO` | `false` | Capture full tool I/O (large payloads) |
-| `CLAWGUARD_MAX_FULL_IO_BYTES` | `50000` | Max bytes for full I/O capture |
-| `CLAWGUARD_CAPTURE_TIMING` | `true` | Record tool execution timing |
-| `CLAWGUARD_FLUSH_INTERVAL_SECONDS` | `2.0` | How often to batch-send events |
+```bash
+export CLAWGUARD_BACKEND_URL=https://your-clawguard-server.com
+export CLAWGUARD_API_KEY=cg_your_api_key_here
+export CLAWGUARD_AGENT_ID=my-research-bot
+```
+
+### Configuration options
+
+| Option | Env var | Default | Description |
+|---|---|---|---|
+| `backendUrl` | `CLAWGUARD_BACKEND_URL` | `http://localhost:8000` | ClawGuard backend URL |
+| `apiKey` | `CLAWGUARD_API_KEY` | (required) | API key from registration |
+| `agentId` | `CLAWGUARD_AGENT_ID` | `openclaw-agent` | Identifier for this agent |
+| `captureFullIo` | - | `false` | Capture full tool input/output (up to 50KB) |
+| `blockSensitiveAccess` | - | `false` | Block tool calls to sensitive files |
+| `requireApprovalForHighRisk` | - | `false` | Require user approval for potential exfiltration |
+| `batchSize` | - | `10` | Events buffered before sending |
+| `flushIntervalMs` | - | `5000` | Max time before flushing event buffer |
 
 ## What Gets Detected
 
-The SDK runs local risk checks on every event, and the backend runs deeper analysis:
-
-### Local (SDK-side) Detection
-- **Prompt injection** — external content with override/ignore language patterns
+### Local (plugin-side)
 - **Sensitive file access** — `.env`, `.ssh/`, `credentials`, `private_key`, etc.
 - **Credential exposure** — AWS keys, API tokens, private keys in tool output
-- **Exfiltration chains** — sensitive data read followed by outbound request
-- **Communication spikes** — burst of outbound requests
-- **Chain escalation** — accumulating medium-risk events escalating to high
+- **Data flow tracking** — sensitive read followed by outbound request (exfiltration flag)
 
-### Server-side Analysis
+### Server-side analysis
 - **Behavioral anomaly** — actions outside the agent's learned baseline
 - **Goal deviation** — agent thread doing something unrelated to the stated task
 - **Cross-thread escalation** — progressive risk pattern across execution threads
-- **Data flow tracking** — sensitive data propagation from read to send
 - **Thread segmentation** — groups related actions into causal threads for deeper analysis
 
-## Agent Compatibility
+## Prerequisites
 
-The SDK works with any Python agent that has:
-- A `.run(task)` method
-- A `.tools` attribute (list or dict of callable tools)
+You need a running ClawGuard backend. See the [ClawGuard server repository](https://github.com/rutipo/ClawGuard) for setup instructions.
 
-This includes agents built with LangChain, CrewAI, AutoGen, or custom frameworks.
+Quick setup:
 
-```python
-# LangChain example
-from langchain.agents import create_openai_tools_agent
-agent = create_openai_tools_agent(llm, tools, prompt)
-result = secure_run(agent, task="...")
+```bash
+git clone https://github.com/rutipo/ClawGuard.git
+cd ClawGuard
+pip install -e ".[server]"
 
-# Custom agent
-class MyAgent:
-    def __init__(self):
-        self.tools = [search, read_file, send_email]
+# Start PostgreSQL
+docker compose up -d postgres
 
-    def run(self, task):
-        # your logic
-        ...
+# Configure
+cp .env.example .env
+# Edit .env: set DATABASE_URL, TELEGRAM_BOT_TOKEN
 
-result = secure_run(MyAgent(), task="...")
+# Run migrations + bootstrap
+alembic upgrade head
+python scripts/bootstrap.py --email you@example.com
+
+# Start backend
+uvicorn clawguard.backend.main:app --host 0.0.0.0 --port 8000
+
+# Start Telegram bot (separate terminal)
+python -m clawguard.bot.bot
 ```
 
-## Telegram Commands
+### Connect Telegram
+
+1. Message [@BotFather](https://t.me/BotFather) on Telegram and create a bot
+2. Set `TELEGRAM_BOT_TOKEN` in your `.env`
+3. Register: `curl -X POST http://localhost:8000/v1/register -H "Content-Type: application/json" -d '{"email": "you@example.com"}'`
+4. Save the returned API key
+
+## Telegram Bot Commands
 
 Once connected, use these commands in the ClawGuard Telegram bot:
 
@@ -222,54 +136,14 @@ Once connected, use these commands in the ClawGuard Telegram bot:
 | `/label <session> tp\|fp\|nr` | Mark alert as true/false positive |
 | `/feedback <message>` | Send feedback |
 
-## Self-Hosting the Backend
-
-To run your own ClawGuard backend, see the [ClawGuard server repository](https://github.com/rutipo/ClawGuard).
-
-Quick setup:
+## Development
 
 ```bash
-git clone https://github.com/rutipo/ClawGuard.git
-cd ClawGuard
-pip install -e ".[server]"
-
-# Start PostgreSQL (install directly or use Docker)
-# Create database: createdb clawguard
-
-# Configure
-cp .env.example .env
-# Edit .env: set DATABASE_URL, TELEGRAM_BOT_TOKEN
-
-# Run migrations
-alembic upgrade head
-
-# Start backend
-uvicorn clawguard.backend.main:app --host 0.0.0.0 --port 8000
-
-# Start Telegram bot (separate terminal)
-python -m clawguard.bot.bot
+cd openclaw-plugin
+npm install
+npm run build
+npm test
 ```
-
-### Setting Up Telegram Bot
-
-1. Message [@BotFather](https://t.me/BotFather) on Telegram
-2. Send `/newbot` and follow the prompts
-3. Copy the bot token to your `.env` as `TELEGRAM_BOT_TOKEN`
-4. Start the bot process: `python -m clawguard.bot.bot`
-
-## API Reference
-
-The SDK communicates with these backend endpoints:
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/v1/register` | POST | Create user account |
-| `/v1/sessions/start` | POST | Start monitoring session |
-| `/v1/sessions/end` | POST | End monitoring session |
-| `/v1/events` | POST | Submit single event |
-| `/v1/events/batch` | POST | Submit event batch |
-| `/v1/connect-telegram` | POST | Register Telegram code |
-| `/health` | GET | Backend health check |
 
 ## License
 

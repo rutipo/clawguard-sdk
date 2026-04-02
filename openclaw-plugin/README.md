@@ -84,12 +84,15 @@ export CLAWGUARD_AGENT_ID=my-research-bot
 
 ## Prerequisites
 
-ClawGuard backend must be running and accessible from the OpenClaw machine:
+ClawGuard backend must be running and accessible from the OpenClaw machine. See the [ClawGuard server repository](https://github.com/rutipo/ClawGuard) for full setup instructions.
 
 ```bash
 # On your server
-pip install clawguard
-python -m uvicorn clawguard.backend.main:app --host 0.0.0.0 --port 8000
+git clone https://github.com/rutipo/ClawGuard.git
+cd ClawGuard
+pip install -e ".[server]"
+alembic upgrade head
+uvicorn clawguard.backend.main:app --host 0.0.0.0 --port 8000
 
 # Create an account
 curl -X POST http://localhost:8000/v1/register \
