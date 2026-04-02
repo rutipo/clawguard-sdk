@@ -18,15 +18,25 @@
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "vitest run --dir ../tests/openclaw-plugin",
-    "test:watch": "vitest --dir ../tests/openclaw-plugin"
+    "test:watch": "vitest --dir ../tests/openclaw-plugin",
+    "prepublishOnly": "npm run build"
   },
   "keywords": [
     "openclaw",
     "plugin",
     "security",
     "monitoring",
-    "clawguard"
+    "clawguard",
+    "ai-agent",
+    "telegram"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rutipo/clawguard-sdk.git",
+    "directory": "openclaw-plugin"
+  },
+  "homepage": "https://github.com/rutipo/clawguard-sdk#readme",
+  "author": "ClawGuard",
   "license": "MIT",
   "engines": {
     "node": ">=22.0.0"

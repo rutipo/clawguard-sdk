@@ -48,6 +48,7 @@ const sessions = new Map<string, ActiveSession>();
 
 let client: ClawGuardClient;
 let pluginConfig: ClawGuardPluginConfig;
+let initialized = false;
 
 /**
  * Resolve a session for a given context, creating one if needed.
@@ -61,7 +62,9 @@ async function resolveSession(ctx: HookContext): Promise<ActiveSession> {
   // Create a new session
   const agentId = ctx.agentId || pluginConfig.agentId;
   const task = ""; // Task isn't known until first user message
+  console.log(`[clawguard] Creating session for agent: ${agentId}`);
   const sessionId = await client.startSession(agentId, task);
+  console.log(`[clawguard] Session created: ${sessionId}`);
 
   session = {
     sessionId,
@@ -377,6 +380,11 @@ export default definePluginEntry({
   name: "ClawGuard Monitor",
   description: "Security monitoring for OpenClaw agents — detects risky behavior and sends Telegram alerts",
   register(api) {
+    // Prevent duplicate initialization
+    if (initialized) {
+      return;
+    }
+
     // Only fully initialize in "full" registration mode
     if (api.registrationMode && api.registrationMode !== "full") {
       return;
@@ -391,6 +399,8 @@ export default definePluginEntry({
       return;
     }
 
+    initialized = true;
+
     console.log(
       `[clawguard] Monitoring active - backend: ${pluginConfig.backendUrl}, agent: ${pluginConfig.agentId}`,
     );
@@ -402,9 +412,9 @@ export default definePluginEntry({
     // Hook into tool execution lifecycle
     api.registerHook("before_tool_call", async (ctx: HookContext) => {
       try {
+        console.log(`[clawguard] tool_call: ${ctx.tool || "unknown"}`);
         return await handleBeforeToolCall(ctx);
       } catch (err) {
-        // Never let monitoring errors break agent execution
         console.error("[clawguard] before_tool_call error:", (err as Error).message);
       }
     });
