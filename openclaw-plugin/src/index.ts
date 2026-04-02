@@ -418,106 +418,96 @@ export default definePluginEntry({
     _global[CONFIG_KEY] = pluginConfig;
     client.start();
 
-    // --- Hook registration ---
-    // OpenClaw issue #5513: initializeGlobalHookRunner() runs BEFORE plugins
-    // finish registering hooks, so hasHooks() returns false and hooks never
-    // fire. Workarounds:
-    //   1. tool_result_persist — synchronous transform in the data persist
-    //      pipeline, bypasses the hook runner entirely
-    //   2. Delayed registration — register hooks after a delay so the hook
-    //      runner picks them up on next check
-    //   3. Standard registerHook — in case the timing bug is fixed in future
+    // --- Deep diagnostic ---
+    // Hook system is completely disconnected from embedded agent tool pipeline
+    // (OpenClaw #5513). Inspect internal state to find an alternative intercept.
 
-    const beforeToolHandler = async (ctx: HookContext) => {
-      console.log("[clawguard] hook fired: before_tool_call", ctx?.tool || "no-tool");
-      try {
-        return await handleBeforeToolCall(ctx);
-      } catch (err) {
-        console.error("[clawguard] before_tool_call error:", (err as Error).message);
-      }
-    };
-
-    const messageSendingHandler = async (ctx: HookContext) => {
-      console.log("[clawguard] hook fired: message_sending");
-      try {
-        return await handleMessageSending(ctx);
-      } catch (err) {
-        console.error("[clawguard] message_sending error:", (err as Error).message);
-      }
-    };
-
-    // 1. tool_result_persist — synchronous hook in the persist pipeline.
-    //    This fires when tool results are written to the session transcript,
-    //    giving us visibility into every tool call + result.
-    try {
-      api.registerHook("tool_result_persist", (ctx: HookContext) => {
-        console.log("[clawguard] tool_result_persist fired:", ctx?.tool || "unknown-tool");
-        const session = sessions.get(ctx.sessionKey || "main");
-        if (session) {
-          handleToolResult(session, ctx.tool || "unknown", ctx.result);
+    // Dump api.runtime structure
+    const rt = api.runtime;
+    if (rt) {
+      console.log("[clawguard] DIAG api.runtime keys:", Object.keys(rt).join(", "));
+      for (const key of Object.keys(rt)) {
+        const val = (rt as unknown as Record<string, unknown>)[key];
+        const type = val === null ? "null" : Array.isArray(val) ? "array" : typeof val;
+        if (type === "object" && val) {
+          console.log(`[clawguard] DIAG runtime.${key}: ${type} keys=[${Object.keys(val as object).join(", ")}]`);
+        } else {
+          console.log(`[clawguard] DIAG runtime.${key}: ${type}`);
         }
-        return ctx; // Pass through unmodified
-      }, {
-        name: "clawguard.tool-result-persist",
-        description: "ClawGuard monitoring — observes tool results as they persist",
-      });
-      console.log("[clawguard] tool_result_persist hook registered");
-    } catch (err) {
-      console.error("[clawguard] tool_result_persist registration failed:", (err as Error).message);
+      }
+    } else {
+      console.log("[clawguard] DIAG api.runtime is", typeof rt);
     }
 
-    // 2. Standard registration — immediate
+    // Dump api.config top-level keys
+    if (api.config) {
+      console.log("[clawguard] DIAG api.config keys:", Object.keys(api.config).join(", "));
+    }
+
+    // Check if api has any EventEmitter-like internals
+    const apiAny = api as unknown as Record<string, unknown>;
+    for (const key of ["_events", "_emitter", "emitter", "eventBus", "bus", "hookRunner", "hooks", "_hooks", "toolRunner", "agentRunner", "sessionManager", "toolExecutor"]) {
+      if (apiAny[key] !== undefined) {
+        const val = apiAny[key];
+        const type = val === null ? "null" : typeof val;
+        console.log(`[clawguard] DIAG api.${key}: ${type}${type === "object" && val ? " keys=[" + Object.keys(val as object).join(", ") + "]" : ""}`);
+      }
+    }
+
+    // Check globalThis for OpenClaw singletons
+    const gKeys = Object.getOwnPropertyNames(globalThis).filter(k =>
+      /openclaw|hook|agent|tool|runner|session|gateway/i.test(k)
+    );
+    if (gKeys.length > 0) {
+      console.log("[clawguard] DIAG globalThis relevant keys:", gKeys.join(", "));
+      for (const k of gKeys.slice(0, 10)) {
+        const val = (globalThis as Record<string, unknown>)[k];
+        const type = val === null ? "null" : typeof val;
+        console.log(`[clawguard] DIAG globalThis.${k}: ${type}${type === "object" && val ? " keys=[" + Object.keys(val as object).slice(0, 15).join(", ") + "]" : ""}`);
+      }
+    } else {
+      console.log("[clawguard] DIAG no relevant globalThis keys found");
+    }
+
+    // Check Symbol-keyed properties on globalThis for internal registries
+    const symKeys = Object.getOwnPropertySymbols(globalThis);
+    const relevantSyms = symKeys.filter(s => {
+      const desc = s.description || s.toString();
+      return /openclaw|hook|agent|tool|runner|session|gateway|plugin|registry/i.test(desc);
+    });
+    if (relevantSyms.length > 0) {
+      console.log("[clawguard] DIAG globalThis symbols:", relevantSyms.map(s => s.description || s.toString()).join(", "));
+      for (const s of relevantSyms.slice(0, 10)) {
+        const val = (globalThis as Record<symbol, unknown>)[s];
+        const type = val === null ? "null" : typeof val;
+        console.log(`[clawguard] DIAG sym(${s.description}): ${type}${type === "object" && val ? " keys=[" + Object.keys(val as object).slice(0, 15).join(", ") + "]" : ""}`);
+      }
+    } else {
+      console.log("[clawguard] DIAG no relevant globalThis symbols found (checked", symKeys.length, "total)");
+    }
+
+    // Register hooks anyway (in case future versions fix #5513)
     try {
-      api.registerHook("before_tool_call", beforeToolHandler, {
-        name: "clawguard.before-tool-call",
-        description: "ClawGuard security monitoring — captures tool calls and detects risky behavior",
-      });
-      api.registerHook("after_tool_call", async (ctx: HookContext) => {
-        console.log("[clawguard] hook fired: after_tool_call", ctx?.tool || "no-tool");
-        const session = sessions.get(ctx.sessionKey || "main");
-        if (session) {
-          handleToolResult(session, ctx.tool || "unknown", ctx.result);
-        }
+      api.registerHook("before_tool_call", async (ctx: HookContext) => {
+        console.log("[clawguard] hook fired: before_tool_call", ctx?.tool || "no-tool");
+        try { return await handleBeforeToolCall(ctx); }
+        catch (err) { console.error("[clawguard] before_tool_call error:", (err as Error).message); }
       }, {
-        name: "clawguard.after-tool-call",
-        description: "ClawGuard security monitoring — captures tool results",
+        name: "clawguard.before-tool-call",
+        description: "ClawGuard security monitoring — captures tool calls",
       });
-      api.registerHook("message_sending", messageSendingHandler, {
+      api.registerHook("message_sending", async (ctx: HookContext) => {
+        console.log("[clawguard] hook fired: message_sending");
+        try { return await handleMessageSending(ctx); }
+        catch (err) { console.error("[clawguard] message_sending error:", (err as Error).message); }
+      }, {
         name: "clawguard.message-sending",
         description: "ClawGuard security monitoring — captures outbound messages",
       });
-      console.log("[clawguard] Standard hooks registered (immediate)");
+      console.log("[clawguard] Hooks registered (for future compatibility)");
     } catch (err) {
-      console.error("[clawguard] Standard hook registration failed:", (err as Error).message);
+      console.error("[clawguard] Hook registration failed:", (err as Error).message);
     }
-
-    // 3. Delayed re-registration — workaround for hook runner timing bug (#5513).
-    //    Re-register after 3s so the hook runner picks up hooks on next check.
-    setTimeout(() => {
-      try {
-        api.registerHook("before_tool_call", beforeToolHandler, {
-          name: "clawguard.before-tool-call-delayed",
-          description: "ClawGuard security monitoring (delayed registration)",
-        });
-        api.registerHook("after_tool_call", async (ctx: HookContext) => {
-          console.log("[clawguard] hook fired: after_tool_call (delayed)", ctx?.tool || "no-tool");
-          const session = sessions.get(ctx.sessionKey || "main");
-          if (session) {
-            handleToolResult(session, ctx.tool || "unknown", ctx.result);
-          }
-        }, {
-          name: "clawguard.after-tool-call-delayed",
-          description: "ClawGuard security monitoring (delayed registration)",
-        });
-        api.registerHook("message_sending", messageSendingHandler, {
-          name: "clawguard.message-sending-delayed",
-          description: "ClawGuard security monitoring (delayed registration)",
-        });
-        console.log("[clawguard] Delayed hooks registered (3s after startup)");
-      } catch (err) {
-        console.error("[clawguard] Delayed hook registration failed:", (err as Error).message);
-      }
-    }, 3000);
 
     // Flush remaining events on shutdown (best-effort, non-blocking)
     process.on("SIGTERM", () => {
