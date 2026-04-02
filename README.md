@@ -32,26 +32,43 @@ Or install from source:
 git clone https://github.com/rutipo/clawguard-plugin.git
 cd clawguard-plugin/openclaw-plugin
 npm install && npm run build
-openclaw plugins link .
 ```
+
+Then add the plugin to your OpenClaw config with a local `path` pointing to the `openclaw-plugin` directory (see Configuration below).
 
 ## Configuration
 
-Add to your OpenClaw config (`~/.openclaw/config.json` or equivalent):
+**Option A: CLI (recommended)**
+
+```bash
+openclaw config set plugins.entries.clawguard-monitor.config.backendUrl "https://your-clawguard-server.com"
+openclaw config set plugins.entries.clawguard-monitor.config.apiKey "cg_your_api_key_here"
+openclaw config set plugins.entries.clawguard-monitor.config.agentId "my-research-bot"
+openclaw gateway restart
+```
+
+**Option B: Edit config file**
+
+Add to your OpenClaw config (`~/.openclaw/openclaw.json` or equivalent):
 
 ```json
 {
   "plugins": {
-    "clawguard-monitor": {
-      "backendUrl": "https://your-clawguard-server.com",
-      "apiKey": "cg_your_api_key_here",
-      "agentId": "my-research-bot"
+    "entries": {
+      "clawguard-monitor": {
+        "enabled": true,
+        "config": {
+          "backendUrl": "https://your-clawguard-server.com",
+          "apiKey": "cg_your_api_key_here",
+          "agentId": "my-research-bot"
+        }
+      }
     }
   }
 }
 ```
 
-Or use environment variables:
+**Option C: Environment variables**
 
 ```bash
 export CLAWGUARD_BACKEND_URL=https://your-clawguard-server.com

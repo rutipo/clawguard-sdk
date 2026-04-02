@@ -62,9 +62,7 @@ async function resolveSession(ctx: HookContext): Promise<ActiveSession> {
   // Create a new session
   const agentId = ctx.agentId || pluginConfig.agentId;
   const task = ""; // Task isn't known until first user message
-  console.log(`[clawguard] Creating session for agent: ${agentId}`);
   const sessionId = await client.startSession(agentId, task);
-  console.log(`[clawguard] Session created: ${sessionId}`);
 
   session = {
     sessionId,
@@ -412,7 +410,6 @@ export default definePluginEntry({
     // Hook into tool execution lifecycle
     api.registerHook("before_tool_call", async (ctx: HookContext) => {
       try {
-        console.log(`[clawguard] tool_call: ${ctx.tool || "unknown"}`);
         return await handleBeforeToolCall(ctx);
       } catch (err) {
         console.error("[clawguard] before_tool_call error:", (err as Error).message);
