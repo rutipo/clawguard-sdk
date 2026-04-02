@@ -46,9 +46,16 @@ interface ActiveSession {
 /** Per-session-key tracking of active sessions. */
 const sessions = new Map<string, ActiveSession>();
 
-let client: ClawGuardClient;
-let pluginConfig: ClawGuardPluginConfig;
-let initialized = false;
+const INIT_KEY = Symbol.for("clawguard-monitor-initialized");
+const CLIENT_KEY = Symbol.for("clawguard-monitor-client");
+const CONFIG_KEY = Symbol.for("clawguard-monitor-config");
+const SESSIONS_KEY = Symbol.for("clawguard-monitor-sessions");
+
+const _global = globalThis as Record<symbol, unknown>;
+
+let client: ClawGuardClient = _global[CLIENT_KEY] as ClawGuardClient;
+let pluginConfig: ClawGuardPluginConfig = _global[CONFIG_KEY] as ClawGuardPluginConfig;
+let initialized: boolean = (_global[INIT_KEY] as boolean) ?? false;
 
 /**
  * Resolve a session for a given context, creating one if needed.
@@ -398,6 +405,7 @@ export default definePluginEntry({
     }
 
     initialized = true;
+    _global[INIT_KEY] = true;
 
     console.log(
       `[clawguard] Monitoring active - backend: ${pluginConfig.backendUrl}, agent: ${pluginConfig.agentId}`,
@@ -405,6 +413,8 @@ export default definePluginEntry({
 
     // Initialize HTTP client
     client = new ClawGuardClient(pluginConfig);
+    _global[CLIENT_KEY] = client;
+    _global[CONFIG_KEY] = pluginConfig;
     client.start();
 
     // Hook into tool execution lifecycle
