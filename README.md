@@ -2,6 +2,8 @@
 
 Python SDK for **ClawGuard** — real-time security monitoring for AI agents. Wraps your agent's tool calls, detects risky behavior (data exfiltration, prompt injection, credential access), and sends alerts to Telegram.
 
+> **This is the public distribution repo.** It contains only the client-side SDK, CLI, and OpenClaw plugin — the code users install on their OpenClaw machines to connect to the ClawGuard monitoring service. The backend, analysis engine, and Telegram bot are in the private [`rutipo/ClawGuard`](https://github.com/rutipo/ClawGuard) repository and are never distributed to users.
+
 ## How It Works
 
 ```
