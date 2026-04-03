@@ -418,95 +418,98 @@ export default definePluginEntry({
     _global[CONFIG_KEY] = pluginConfig;
     client.start();
 
-    // --- Deep diagnostic ---
-    // Hook system is completely disconnected from embedded agent tool pipeline
-    // (OpenClaw #5513). Inspect internal state to find an alternative intercept.
+    // --- Event-based monitoring ---
+    // OpenClaw's hook system is broken for embedded agents (#5513 — the
+    // internal hook handler registry is literally empty). Instead, we use
+    // runtime.events.onAgentEvent and onSessionTranscriptUpdate which are
+    // wired directly into the agent loop.
 
-    // Dump api.runtime structure
-    const rt = api.runtime;
-    if (rt) {
-      console.log("[clawguard] DIAG api.runtime keys:", Object.keys(rt).join(", "));
-      for (const key of Object.keys(rt)) {
-        const val = (rt as unknown as Record<string, unknown>)[key];
-        const type = val === null ? "null" : Array.isArray(val) ? "array" : typeof val;
-        if (type === "object" && val) {
-          console.log(`[clawguard] DIAG runtime.${key}: ${type} keys=[${Object.keys(val as object).join(", ")}]`);
-        } else {
-          console.log(`[clawguard] DIAG runtime.${key}: ${type}`);
+    const runtimeAny = api.runtime as unknown as Record<string, unknown> | undefined;
+    const events = runtimeAny?.events as Record<string, unknown> | undefined;
+
+    if (events && typeof events.onAgentEvent === "function") {
+      console.log("[clawguard] Subscribing to runtime.events.onAgentEvent");
+      (events.onAgentEvent as Function)((event: Record<string, unknown>) => {
+        const eventType = String(event.type || event.event_type || event.kind || "unknown");
+        const toolName = String(event.tool || event.toolName || event.tool_name || "");
+        console.log(
+          "[clawguard] AgentEvent:",
+          eventType,
+          toolName ? `tool=${toolName}` : "",
+          "keys=" + Object.keys(event).join(","),
+        );
+
+        // Handle tool-related events
+        if (/tool/i.test(eventType) && toolName) {
+          const ctx: HookContext = {
+            tool: toolName,
+            args: (event.params || event.args || event.input) as Record<string, unknown> | undefined,
+            result: event.result || event.output,
+            sessionKey: String(event.sessionId || event.session_id || "main"),
+            agentId: String(event.agentId || event.agent_id || pluginConfig.agentId),
+          };
+
+          // Determine if this is a before or after event
+          if (/start|before|begin|invoke/i.test(eventType)) {
+            handleBeforeToolCall(ctx).catch(err => {
+              console.error("[clawguard] before_tool_call error:", (err as Error).message);
+            });
+          } else if (/end|after|complete|result/i.test(eventType)) {
+            const session = sessions.get(ctx.sessionKey || "main");
+            if (session) {
+              handleToolResult(session, toolName, ctx.result);
+            }
+          }
         }
-      }
+
+        // Handle message events
+        if (/message.*send|response|reply/i.test(eventType)) {
+          const ctx: HookContext = {
+            message: String(event.content || event.message || event.text || ""),
+            channel: String(event.channel || "unknown"),
+            sessionKey: String(event.sessionId || event.session_id || "main"),
+            agentId: String(event.agentId || event.agent_id || pluginConfig.agentId),
+          };
+          handleMessageSending(ctx).catch(err => {
+            console.error("[clawguard] message_sending error:", (err as Error).message);
+          });
+        }
+      });
     } else {
-      console.log("[clawguard] DIAG api.runtime is", typeof rt);
+      console.log("[clawguard] runtime.events.onAgentEvent not available");
     }
 
-    // Dump api.config top-level keys
-    if (api.config) {
-      console.log("[clawguard] DIAG api.config keys:", Object.keys(api.config).join(", "));
-    }
-
-    // Check if api has any EventEmitter-like internals
-    const apiAny = api as unknown as Record<string, unknown>;
-    for (const key of ["_events", "_emitter", "emitter", "eventBus", "bus", "hookRunner", "hooks", "_hooks", "toolRunner", "agentRunner", "sessionManager", "toolExecutor"]) {
-      if (apiAny[key] !== undefined) {
-        const val = apiAny[key];
-        const type = val === null ? "null" : typeof val;
-        console.log(`[clawguard] DIAG api.${key}: ${type}${type === "object" && val ? " keys=[" + Object.keys(val as object).join(", ") + "]" : ""}`);
-      }
-    }
-
-    // Check globalThis for OpenClaw singletons
-    const gKeys = Object.getOwnPropertyNames(globalThis).filter(k =>
-      /openclaw|hook|agent|tool|runner|session|gateway/i.test(k)
-    );
-    if (gKeys.length > 0) {
-      console.log("[clawguard] DIAG globalThis relevant keys:", gKeys.join(", "));
-      for (const k of gKeys.slice(0, 10)) {
-        const val = (globalThis as Record<string, unknown>)[k];
-        const type = val === null ? "null" : typeof val;
-        console.log(`[clawguard] DIAG globalThis.${k}: ${type}${type === "object" && val ? " keys=[" + Object.keys(val as object).slice(0, 15).join(", ") + "]" : ""}`);
-      }
+    if (events && typeof events.onSessionTranscriptUpdate === "function") {
+      console.log("[clawguard] Subscribing to runtime.events.onSessionTranscriptUpdate");
+      (events.onSessionTranscriptUpdate as Function)((update: Record<string, unknown>) => {
+        console.log(
+          "[clawguard] TranscriptUpdate:",
+          "keys=" + Object.keys(update).join(","),
+          JSON.stringify(update).slice(0, 400),
+        );
+      });
     } else {
-      console.log("[clawguard] DIAG no relevant globalThis keys found");
-    }
-
-    // Check Symbol-keyed properties on globalThis for internal registries
-    const symKeys = Object.getOwnPropertySymbols(globalThis);
-    const relevantSyms = symKeys.filter(s => {
-      const desc = s.description || s.toString();
-      return /openclaw|hook|agent|tool|runner|session|gateway|plugin|registry/i.test(desc);
-    });
-    if (relevantSyms.length > 0) {
-      console.log("[clawguard] DIAG globalThis symbols:", relevantSyms.map(s => s.description || s.toString()).join(", "));
-      for (const s of relevantSyms.slice(0, 10)) {
-        const val = (globalThis as Record<symbol, unknown>)[s];
-        const type = val === null ? "null" : typeof val;
-        console.log(`[clawguard] DIAG sym(${s.description}): ${type}${type === "object" && val ? " keys=[" + Object.keys(val as object).slice(0, 15).join(", ") + "]" : ""}`);
-      }
-    } else {
-      console.log("[clawguard] DIAG no relevant globalThis symbols found (checked", symKeys.length, "total)");
+      console.log("[clawguard] runtime.events.onSessionTranscriptUpdate not available");
     }
 
     // Register hooks anyway (in case future versions fix #5513)
     try {
       api.registerHook("before_tool_call", async (ctx: HookContext) => {
-        console.log("[clawguard] hook fired: before_tool_call", ctx?.tool || "no-tool");
         try { return await handleBeforeToolCall(ctx); }
-        catch (err) { console.error("[clawguard] before_tool_call error:", (err as Error).message); }
+        catch (err) { console.error("[clawguard] hook error:", (err as Error).message); }
       }, {
         name: "clawguard.before-tool-call",
         description: "ClawGuard security monitoring — captures tool calls",
       });
       api.registerHook("message_sending", async (ctx: HookContext) => {
-        console.log("[clawguard] hook fired: message_sending");
         try { return await handleMessageSending(ctx); }
-        catch (err) { console.error("[clawguard] message_sending error:", (err as Error).message); }
+        catch (err) { console.error("[clawguard] hook error:", (err as Error).message); }
       }, {
         name: "clawguard.message-sending",
         description: "ClawGuard security monitoring — captures outbound messages",
       });
-      console.log("[clawguard] Hooks registered (for future compatibility)");
-    } catch (err) {
-      console.error("[clawguard] Hook registration failed:", (err as Error).message);
+    } catch {
+      // Hooks registered for future compatibility; expected to not fire currently
     }
 
     // Flush remaining events on shutdown (best-effort, non-blocking)
