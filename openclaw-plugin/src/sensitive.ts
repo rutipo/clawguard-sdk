@@ -28,7 +28,16 @@ const SENSITIVE_PATTERNS: SensitivePattern[] = [
   { name: "private_key", pattern: /-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----/ },
 
   // Database connection strings
-  { name: "database_url", pattern: /(?:postgres|mysql|mongodb|redis):\/\/[^\s]+/ },
+  { name: "database_url", pattern: /(?:postgres|mysql|mongodb|redis|mssql|oracle):\/\/[^\s]+/ },
+
+  // Slack tokens
+  { name: "slack_token", pattern: /xox[bpras]-[A-Za-z0-9-]{10,}/ },
+
+  // GCP API keys
+  { name: "gcp_api_key", pattern: /AIza[0-9A-Za-z\-_]{35}/ },
+
+  // GCP service account key files
+  { name: "gcp_service_account", pattern: /"type"\s*:\s*"service_account"/ },
 
   // Generic secret/password in config
   { name: "secret_in_config", pattern: /(?:SECRET|PASSWORD|TOKEN|API_KEY)[_A-Z]*\s*[=:]\s*\S{8,}/ },

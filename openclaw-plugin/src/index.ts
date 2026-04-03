@@ -51,14 +51,18 @@ interface ActiveSession {
 /** Per-session-key tracking of active sessions. */
 const sessions = new Map<string, ActiveSession>();
 
-const INIT_KEY = Symbol.for("clawguard-monitor-initialized");
-const CLIENT_KEY = Symbol.for("clawguard-monitor-client");
-const CONFIG_KEY = Symbol.for("clawguard-monitor-config");
+/** Security limits for session tracking. */
+const MAX_SESSIONS = 100;
+const SESSION_TTL_MS = 60 * 60 * 1000; // 1 hour
 
+// Use Symbol.for() only for the boolean init guard (no sensitive data).
+// Client and config are module-scoped only — not stored on globalThis —
+// so other plugins cannot enumerate symbols to steal the API key.
+const INIT_KEY = Symbol.for("clawguard-monitor-initialized");
 const _global = globalThis as Record<symbol, unknown>;
 
-let client: ClawGuardClient = _global[CLIENT_KEY] as ClawGuardClient;
-let pluginConfig: ClawGuardPluginConfig = _global[CONFIG_KEY] as ClawGuardPluginConfig;
+let client: ClawGuardClient;
+let pluginConfig: ClawGuardPluginConfig;
 let initialized: boolean = (_global[INIT_KEY] as boolean) ?? false;
 
 /**
@@ -67,8 +71,30 @@ let initialized: boolean = (_global[INIT_KEY] as boolean) ?? false;
 async function resolveSession(ctx: HookContext): Promise<ActiveSession> {
   const key = ctx.sessionKey || "main";
 
+  // Evict expired sessions to prevent unbounded memory growth
+  const now = Date.now();
+  for (const [k, s] of sessions.entries()) {
+    if (now - s.startedAt > SESSION_TTL_MS) {
+      sessions.delete(k);
+    }
+  }
+
   let session = sessions.get(key);
   if (session) return session;
+
+  // Enforce session limit
+  if (sessions.size >= MAX_SESSIONS) {
+    // Evict the oldest session
+    let oldestKey: string | undefined;
+    let oldestTime = Infinity;
+    for (const [k, s] of sessions.entries()) {
+      if (s.startedAt < oldestTime) {
+        oldestTime = s.startedAt;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) sessions.delete(oldestKey);
+  }
 
   // Create a new session
   const agentId = ctx.agentId || pluginConfig.agentId;
@@ -389,14 +415,13 @@ export default definePluginEntry({
     initialized = true;
     _global[INIT_KEY] = true;
 
-    console.log(
-      `[clawguard] Monitoring active - backend: ${pluginConfig.backendUrl}, agent: ${pluginConfig.agentId}`,
-    );
+    console.log("[clawguard] Monitoring active");
+    if (api.logger?.debug) {
+      api.logger.debug(`[clawguard] backend: ${pluginConfig.backendUrl}, agent: ${pluginConfig.agentId}`);
+    }
 
-    // Initialize HTTP client
+    // Initialize HTTP client (module-scoped, not on globalThis, to protect API key)
     client = new ClawGuardClient(pluginConfig);
-    _global[CLIENT_KEY] = client;
-    _global[CONFIG_KEY] = pluginConfig;
     client.start();
 
     // --- Event-based monitoring ---
@@ -436,9 +461,14 @@ export default definePluginEntry({
             const toolName = String(block.name || block.tool || "unknown");
             let args: Record<string, unknown> = {};
             try {
-              args = typeof block.arguments === "string"
-                ? JSON.parse(block.arguments)
-                : (block.arguments as Record<string, unknown>) || {};
+              if (typeof block.arguments === "string") {
+                const parsed = JSON.parse(block.arguments);
+                args = (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed))
+                  ? parsed as Record<string, unknown>
+                  : { raw: String(block.arguments) };
+              } else {
+                args = (block.arguments as Record<string, unknown>) || {};
+              }
             } catch {
               args = { raw: String(block.arguments || "") };
             }
@@ -532,5 +562,5 @@ export default definePluginEntry({
 // Export for direct usage / testing
 export { ClawGuardClient } from "./client.js";
 export { detectSensitiveContent, isHighRiskTool, isSensitivePath } from "./sensitive.js";
-export type { ClawGuardPluginConfig, EventPayload } from "./types.js";
+export type { AnalyzeThreadRequest, AnalyzeThreadResponse, ClawGuardPluginConfig, EventPayload } from "./types.js";
 export { DEFAULT_CONFIG } from "./types.js";

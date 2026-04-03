@@ -116,6 +116,42 @@ export function definePluginEntry(entry: PluginEntry): PluginEntry {
   return entry;
 }
 
+// --- Thread analysis types ---
+
+export interface AnalyzeThreadEvent {
+  timestamp?: string;
+  type?: string;
+  content?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface AnalyzeThreadRequest {
+  events: AnalyzeThreadEvent[];
+  context?: Record<string, unknown>;
+}
+
+export interface AnalyzeThreadResult {
+  thread_id: string;
+  start_time: string;
+  end_time: string;
+  events: Record<string, unknown>[];
+  summary: string;
+  classification: string;
+}
+
+export interface AnalyzeThreadInsight {
+  type: string;
+  thread_id: string;
+  message: string;
+  severity: string;
+}
+
+export interface AnalyzeThreadResponse {
+  status: string;
+  threads: AnalyzeThreadResult[];
+  insights: AnalyzeThreadInsight[];
+}
+
 // --- Plugin configuration ---
 
 export interface ClawGuardPluginConfig {

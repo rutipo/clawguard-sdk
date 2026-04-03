@@ -1,7 +1,7 @@
 {
   "name": "clawguard-monitor",
-  "version": "0.1.0",
-  "description": "ClawGuard security monitoring plugin for OpenClaw agents",
+  "version": "1.0.0",
+  "description": "ClawGuard security monitoring and thread analysis plugin for OpenClaw agents — detects risky behavior, analyzes execution threads, and sends Telegram alerts",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -12,7 +12,14 @@
   "openclaw": {
     "extensions": [
       "./dist/index.js"
-    ]
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.24",
+      "minGatewayVersion": "2026.3.24"
+    },
+    "build": {
+      "openclawVersion": "2026.4.2"
+    }
   },
   "scripts": {
     "build": "tsc",
@@ -28,7 +35,10 @@
     "monitoring",
     "clawguard",
     "ai-agent",
-    "telegram"
+    "telegram",
+    "clawhub",
+    "guardrails",
+    "thread-analysis"
   ],
   "repository": {
     "type": "git",

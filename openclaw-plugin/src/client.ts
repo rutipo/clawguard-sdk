@@ -6,6 +6,8 @@
  */
 
 import type {
+  AnalyzeThreadRequest,
+  AnalyzeThreadResponse,
   BatchEventRequest,
   ClawGuardPluginConfig,
   EventPayload,
@@ -14,6 +16,9 @@ import type {
   SessionStartResponse,
 } from "./types.js";
 
+/** Max queued events before oldest are dropped to prevent memory exhaustion. */
+const MAX_BUFFER_SIZE = 10_000;
+
 export class ClawGuardClient {
   private config: ClawGuardPluginConfig;
   private eventBuffer: EventPayload[] = [];
@@ -21,6 +26,47 @@ export class ClawGuardClient {
 
   constructor(config: ClawGuardPluginConfig) {
     this.config = config;
+    this.validateBackendUrl(config.backendUrl);
+  }
+
+  /**
+   * Validate backend URL to prevent SSRF attacks against internal services.
+   * Blocks private IPs, metadata endpoints, and non-HTTP protocols.
+   */
+  private validateBackendUrl(url: string): void {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`[clawguard] Invalid backend URL: ${url}`);
+    }
+
+    if (!["http:", "https:"].includes(parsed.protocol)) {
+      throw new Error(`[clawguard] Backend URL must use http or https protocol`);
+    }
+
+    const hostname = parsed.hostname;
+    // Block cloud metadata endpoints and private IP ranges (except localhost for dev)
+    const blockedPatterns = [
+      /^169\.254\./, // AWS/Azure metadata
+      /^10\./,
+      /^172\.(1[6-9]|2\d|3[01])\./,
+      /^192\.168\./,
+      /^0\./,
+      /^\[?fe80:/i, // IPv6 link-local
+      /^\[?::1\]?$/,  // IPv6 loopback
+    ];
+
+    if (blockedPatterns.some((p) => p.test(hostname))) {
+      throw new Error(`[clawguard] Backend URL points to a private/internal address`);
+    }
+
+    // Warn if non-localhost URL uses plain HTTP (credentials sent in cleartext)
+    if (parsed.protocol === "http:" && hostname !== "localhost" && hostname !== "127.0.0.1") {
+      console.warn(
+        `[clawguard] WARNING: Backend URL uses HTTP — API key will be sent in cleartext. Use HTTPS in production.`,
+      );
+    }
   }
 
   /** Start the periodic flush timer. */
@@ -62,6 +108,10 @@ export class ClawGuardClient {
 
   /** Queue an event for batched sending. */
   queueEvent(event: EventPayload): void {
+    // Drop oldest events if buffer is full to prevent memory exhaustion
+    if (this.eventBuffer.length >= MAX_BUFFER_SIZE) {
+      this.eventBuffer.splice(0, this.eventBuffer.length - MAX_BUFFER_SIZE + 1);
+    }
     this.eventBuffer.push(event);
     if (this.eventBuffer.length >= this.config.batchSize) {
       this.flush().catch((err) => {
@@ -85,10 +135,18 @@ export class ClawGuardClient {
     try {
       await this.post("/v1/events/batch", body);
     } catch (err) {
-      // Put events back at the front of the buffer for retry
-      this.eventBuffer.unshift(...events);
+      // Put events back for retry, but respect buffer cap to prevent unbounded growth
+      const available = MAX_BUFFER_SIZE - this.eventBuffer.length;
+      if (available > 0) {
+        this.eventBuffer.unshift(...events.slice(-available));
+      }
       throw err;
     }
+  }
+
+  /** Analyze a batch of events into threads (stateless, no DB persistence). */
+  async analyzeThread(request: AnalyzeThreadRequest): Promise<AnalyzeThreadResponse> {
+    return this.post<AnalyzeThreadResponse>("/v1/analyze-thread", request);
   }
 
   /** Make an authenticated POST request to the backend. */
@@ -105,9 +163,9 @@ export class ClawGuardClient {
     });
 
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      // Don't include response body — it may contain sensitive data or be attacker-controlled
       throw new Error(
-        `ClawGuard API error: ${response.status} ${response.statusText} - ${text}`,
+        `ClawGuard API error: ${response.status} ${response.statusText}`,
       );
     }
 

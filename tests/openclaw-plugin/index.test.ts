@@ -13,10 +13,9 @@ beforeEach(() => {
     text: () => Promise.resolve(""),
   });
 
-  // Reset globalThis singleton guards used by the plugin
+  // Reset globalThis singleton guard used by the plugin
+  // (client and config are module-scoped, not on globalThis)
   (globalThis as Record<symbol, unknown>)[Symbol.for("clawguard-monitor-initialized")] = false;
-  delete (globalThis as Record<symbol, unknown>)[Symbol.for("clawguard-monitor-client")];
-  delete (globalThis as Record<symbol, unknown>)[Symbol.for("clawguard-monitor-config")];
 });
 
 describe("register()", () => {

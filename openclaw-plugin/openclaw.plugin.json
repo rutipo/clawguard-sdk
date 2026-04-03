@@ -1,5 +1,8 @@
 {
   "id": "clawguard-monitor",
+  "endpoints": {
+    "analyze": "/analyze-thread"
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
