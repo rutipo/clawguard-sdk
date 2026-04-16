@@ -201,6 +201,14 @@ describe("shell command helpers", () => {
       isHighRisk: false,
       operationKind: "fetch",
     });
+    expect(assessToolCall("http_request", {
+      method: "POST",
+      url: "https://customsearch.googleapis.com/v1/search",
+      json: { query: "best crm for startups", num: 5 },
+    })).toMatchObject({
+      isHighRisk: false,
+      operationKind: "web_search",
+    });
     expect(assessToolCall("http_request", { method: "POST", url: "https://api.example.com", body: "{}" })).toMatchObject({
       isHighRisk: true,
       canEgressData: true,
@@ -210,6 +218,17 @@ describe("shell command helpers", () => {
       isHighRisk: false,
       canEgressData: true,
       toolCategory: "vcs",
+    });
+  });
+
+  it("keeps non-search payload posts risky even when the endpoint name mentions search", () => {
+    expect(assessToolCall("http_request", {
+      method: "POST",
+      url: "https://api.example.com/search",
+      body: "{\"query\":\"latest roadmap\",\"content\":\"full internal document\"}",
+    })).toMatchObject({
+      isHighRisk: true,
+      operationKind: "outbound_request",
     });
   });
 });

@@ -178,6 +178,97 @@ const DATA_EGRESS_TOOLS = new Set([
   "upload_file",
 ]);
 
+const SEARCH_HINTS = [
+  "search",
+  "lookup",
+  "google",
+  "bing",
+  "duckduckgo",
+  "serp",
+  "wiki",
+];
+
+const SEARCH_URL_PATTERNS = [
+  /googleapis\.com\/customsearch/i,
+  /google\.[^/]+\/search/i,
+  /bing\.com\/search/i,
+  /duckduckgo\.com/i,
+  /search\.brave\.com/i,
+  /serpapi\.com/i,
+  /\/(search|customsearch|query|lookup)\b/i,
+];
+
+const SEARCH_QUERY_KEYS = new Set([
+  "q",
+  "query",
+  "search",
+  "searchquery",
+  "searchterm",
+  "keywords",
+  "term",
+  "terms",
+  "topic",
+]);
+
+const SEARCH_ALLOWED_KEYS = new Set([
+  "q",
+  "query",
+  "search",
+  "searchquery",
+  "searchterm",
+  "keywords",
+  "term",
+  "terms",
+  "topic",
+  "site",
+  "sitefilter",
+  "domain",
+  "domains",
+  "includedomains",
+  "excludedomains",
+  "language",
+  "lang",
+  "locale",
+  "region",
+  "country",
+  "market",
+  "gl",
+  "hl",
+  "lr",
+  "safe",
+  "safesearch",
+  "freshness",
+  "timerange",
+  "daterange",
+  "num",
+  "count",
+  "limit",
+  "offset",
+  "page",
+  "pagesize",
+  "start",
+  "cursor",
+  "sort",
+  "order",
+  "filter",
+  "filters",
+]);
+
+const SEARCH_BLOCKED_KEYS = new Set([
+  "file",
+  "files",
+  "upload",
+  "attachment",
+  "attachments",
+  "infile",
+  "content",
+  "message",
+  "prompt",
+  "input",
+  "document",
+  "documents",
+]);
+
 const READ_ONLY_COMMAND_PATTERNS = [
   /^(get-childitem|gci|dir)\b/,
   /^(get-content|gc|type|cat)\b/,
@@ -410,7 +501,146 @@ function requestHasPayload(args?: Record<string, unknown>): boolean {
   return false;
 }
 
+function extractRequestUrl(args?: Record<string, unknown>): string {
+  return extractStringArg(args, ["url", "uri", "endpoint", "href"]) ?? "";
+}
+
+function normalizePayloadKey(key: string): string {
+  return key.replace(/[^a-z0-9]/gi, "").toLowerCase();
+}
+
+function parseStructuredPayload(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value === "object" && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    return undefined;
+  }
+
+  return undefined;
+}
+
+function hasBlockedSearchPayloadKey(record: Record<string, unknown>): boolean {
+  return Object.keys(record).some((key) => SEARCH_BLOCKED_KEYS.has(normalizePayloadKey(key)));
+}
+
+function payloadLooksLikeSearch(record: Record<string, unknown>): boolean {
+  const keys = Object.keys(record).map(normalizePayloadKey);
+  if (keys.length === 0) {
+    return false;
+  }
+
+  if (hasBlockedSearchPayloadKey(record)) {
+    return false;
+  }
+
+  const hasQueryField = keys.some((key) => SEARCH_QUERY_KEYS.has(key));
+  if (!hasQueryField) {
+    return false;
+  }
+
+  return keys.every((key) => SEARCH_ALLOWED_KEYS.has(key));
+}
+
+function textPayloadLooksLikeSearch(value: string): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+
+  if (/^(?:q|query|search|keywords|term)=/.test(normalized) || /[?&](?:q|query|search|keywords|term)=/.test(normalized)) {
+    return !/[?&]?(?:file|files|upload|attachment|content|message|prompt|input)=/.test(normalized);
+  }
+
+  const structured = parseStructuredPayload(value);
+  return structured ? payloadLooksLikeSearch(structured) : false;
+}
+
+function requestPayloadLooksLikeSearch(args?: Record<string, unknown>): boolean {
+  if (!args) {
+    return false;
+  }
+
+  for (const key of ["body", "data", "json", "form"]) {
+    const value = args[key];
+    if (typeof value === "string" && textPayloadLooksLikeSearch(value)) {
+      return true;
+    }
+
+    const structured = parseStructuredPayload(value);
+    if (structured && payloadLooksLikeSearch(structured)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function requestLooksLikeWebSearch(toolName: string, args?: Record<string, unknown>): boolean {
+  const normalizedTool = toolName.toLowerCase();
+  if (SEARCH_HINTS.some((hint) => normalizedTool.includes(hint))) {
+    return true;
+  }
+
+  if (!args) {
+    return false;
+  }
+
+  const explicitQuery = extractStringArg(args, ["query", "q", "search", "keywords", "term"]);
+  if (
+    explicitQuery
+    && (!requestHasPayload(args) || requestPayloadLooksLikeSearch(args))
+    && args.file === undefined
+    && args.files === undefined
+    && args.upload === undefined
+    && args.inFile === undefined
+  ) {
+    return true;
+  }
+
+  const url = extractRequestUrl(args);
+  if (!url) {
+    return false;
+  }
+
+  const urlLooksSearchLike = SEARCH_URL_PATTERNS.some((pattern) => pattern.test(url));
+  if (!urlLooksSearchLike) {
+    return false;
+  }
+
+  const method = extractHttpMethod(toolName, args);
+  if (["GET", "HEAD", "OPTIONS"].includes(method)) {
+    return true;
+  }
+
+  return requestPayloadLooksLikeSearch(args);
+}
+
 function assessHttpLikeTool(toolName: string, args?: Record<string, unknown>): ToolRiskAssessment {
+  if (requestLooksLikeWebSearch(toolName, args)) {
+    return {
+      toolCategory: "discovery",
+      operationKind: "web_search",
+      isHighRisk: false,
+      canEgressData: false,
+    };
+  }
+
   const method = extractHttpMethod(toolName, args);
   const hasPayload = requestHasPayload(args);
 

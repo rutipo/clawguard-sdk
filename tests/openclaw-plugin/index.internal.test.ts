@@ -194,6 +194,26 @@ describe("index __testing helpers", () => {
     expect(client.sendEventImmediate).not.toHaveBeenCalled();
   });
 
+  it("handleToolCall treats search API requests as normal activity", async () => {
+    const mod = await loadModule();
+    const client = makeMockClient();
+    mod.__testing.setStateForTests({ client: client as any, pluginConfig: makeConfig() });
+    mod.__testing.sessions.set("sess-key", makeSession());
+
+    await mod.__testing.handleToolCall({
+      sessionKey: "sess-key",
+      tool: "http_request",
+      args: {
+        method: "POST",
+        url: "https://customsearch.googleapis.com/v1/search",
+        json: { query: "latest software pricing", num: 5 },
+      },
+    });
+
+    expect(client.queueEvent).toHaveBeenCalledOnce();
+    expect(client.sendEventImmediate).not.toHaveBeenCalled();
+  });
+
   it("handleToolCall still alerts on outbound requests with payload", async () => {
     const mod = await loadModule();
     const client = makeMockClient();
