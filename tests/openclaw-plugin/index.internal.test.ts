@@ -178,6 +178,75 @@ describe("index __testing helpers", () => {
     expect(client.sendEventImmediate).not.toHaveBeenCalled();
   });
 
+  it("handleToolCall treats read-only http requests as normal activity", async () => {
+    const mod = await loadModule();
+    const client = makeMockClient();
+    mod.__testing.setStateForTests({ client: client as any, pluginConfig: makeConfig() });
+    mod.__testing.sessions.set("sess-key", makeSession());
+
+    await mod.__testing.handleToolCall({
+      sessionKey: "sess-key",
+      tool: "http_request",
+      args: { method: "GET", url: "https://docs.example.com" },
+    });
+
+    expect(client.queueEvent).toHaveBeenCalledOnce();
+    expect(client.sendEventImmediate).not.toHaveBeenCalled();
+  });
+
+  it("handleToolCall still alerts on outbound requests with payload", async () => {
+    const mod = await loadModule();
+    const client = makeMockClient();
+    mod.__testing.setStateForTests({ client: client as any, pluginConfig: makeConfig() });
+    mod.__testing.sessions.set("sess-key", makeSession());
+
+    await mod.__testing.handleToolCall({
+      sessionKey: "sess-key",
+      tool: "http_request",
+      args: { method: "POST", url: "https://api.example.com/upload", body: "{\"ok\":true}" },
+    });
+
+    expect(client.sendEventImmediate).toHaveBeenCalledOnce();
+    const event = client.sendEventImmediate.mock.calls[0][0];
+    expect(event.risk_flags).toContain("high_risk_tool");
+    expect(event.data.direction).toBe("outbound");
+    expect(event.data.severity).toBe("high");
+  });
+
+  it("handleToolCall treats read-only exec commands as normal activity", async () => {
+    const mod = await loadModule();
+    const client = makeMockClient();
+    mod.__testing.setStateForTests({ client: client as any, pluginConfig: makeConfig() });
+    mod.__testing.sessions.set("sess-key", makeSession());
+
+    await mod.__testing.handleToolCall({
+      sessionKey: "sess-key",
+      tool: "exec",
+      args: { command: "Get-Content C:\\repo\\README.md" },
+    });
+
+    expect(client.queueEvent).toHaveBeenCalledOnce();
+    expect(client.sendEventImmediate).not.toHaveBeenCalled();
+  });
+
+  it("handleToolCall still alerts on sensitive paths inside shell commands", async () => {
+    const mod = await loadModule();
+    const client = makeMockClient();
+    mod.__testing.setStateForTests({ client: client as any, pluginConfig: makeConfig() });
+    mod.__testing.sessions.set("sess-key", makeSession());
+
+    await mod.__testing.handleToolCall({
+      sessionKey: "sess-key",
+      tool: "exec",
+      args: { command: "Get-Content C:\\repo\\.env" },
+    });
+
+    expect(client.sendEventImmediate).toHaveBeenCalledOnce();
+    const event = client.sendEventImmediate.mock.calls[0][0];
+    expect(event.risk_flags).toContain("sensitive_path");
+    expect(event.risk_flags).not.toContain("high_risk_tool");
+  });
+
   it("handleToolResult queues benign outputs with duration and full output", async () => {
     const mod = await loadModule();
     const client = makeMockClient();
@@ -226,7 +295,7 @@ describe("index __testing helpers", () => {
     );
   });
 
-  it("handleMessage queues benign messages and sends sensitive ones immediately", async () => {
+  it("handleMessage queues benign and low-signal pii, but sends secret-like content immediately", async () => {
     const mod = await loadModule();
     const client = makeMockClient();
     mod.__testing.setStateForTests({ client: client as any, pluginConfig: makeConfig() });
@@ -242,8 +311,13 @@ describe("index __testing helpers", () => {
       message: "Send this to user@example.com",
       channel: "email",
     });
+    await mod.__testing.handleMessage({
+      sessionKey: "sess-key",
+      message: "Leaked key sk-abc123def456ghi789jkl012mno",
+      channel: "agent",
+    });
 
-    expect(client.queueEvent).toHaveBeenCalledOnce();
+    expect(client.queueEvent).toHaveBeenCalledTimes(2);
     expect(client.sendEventImmediate).toHaveBeenCalledOnce();
     expect(client.sendEventImmediate.mock.calls[0][0].risk_flags).toContain("sensitive_in_response");
   });
@@ -281,8 +355,11 @@ describe("index __testing helpers", () => {
         apiKey: "config-key",
         agentId: "config-agent",
         captureFullIo: true,
+        maxFullIoBytes: 1234,
         blockSensitiveAccess: true,
         requireApprovalForHighRisk: true,
+        batchSize: 7,
+        flushIntervalMs: 2500,
       },
     } as any);
 
@@ -290,8 +367,54 @@ describe("index __testing helpers", () => {
     expect(config.apiKey).toBe("env-key");
     expect(config.agentId).toBe("env-agent");
     expect(config.captureFullIo).toBe(true);
+    expect(config.maxFullIoBytes).toBe(1234);
     expect(config.blockSensitiveAccess).toBe(true);
     expect(config.requireApprovalForHighRisk).toBe(true);
+    expect(config.batchSize).toBe(7);
+    expect(config.flushIntervalMs).toBe(2500);
+  });
+
+  it("falls back to the full OpenClaw config snapshot when pluginConfig is absent", async () => {
+    const mod = await loadModule();
+
+    const resolved = mod.__testing.resolveConfig({
+      config: {
+        plugins: {
+          entries: {
+            "clawguard-monitor": {
+              config: {
+                backendUrl: "https://snapshot.example.com",
+                apiKey: "snapshot-key",
+                agentId: "snapshot-agent",
+                batchSize: 11,
+              },
+            },
+          },
+        },
+      },
+    } as any);
+
+    expect(resolved.config.backendUrl).toBe("https://snapshot.example.com");
+    expect(resolved.config.apiKey).toBe("snapshot-key");
+    expect(resolved.config.agentId).toBe("snapshot-agent");
+    expect(resolved.config.batchSize).toBe(11);
+    expect(resolved.sources.apiKey).toBe("openclaw config");
+  });
+
+  it("records a warning when CLAWGUARD_API_KEY overrides plugin config", async () => {
+    const mod = await loadModule();
+    process.env.CLAWGUARD_API_KEY = "env-key";
+
+    const resolved = mod.__testing.resolveConfig({
+      pluginConfig: {
+        apiKey: "plugin-key",
+      },
+    } as any);
+
+    expect(resolved.config.apiKey).toBe("env-key");
+    expect(resolved.warnings).toContain(
+      "[clawguard] CLAWGUARD_API_KEY is overriding the plugin runtime API key. If requests return 401, update or clear that environment variable on this machine.",
+    );
   });
 
   it("falls back for nullish helper inputs and config without plugin config", async () => {
@@ -324,6 +447,23 @@ describe("index __testing helpers", () => {
         }),
       }),
     );
+  });
+
+  it("ignores blank string config values so stale entries do not override safe defaults", async () => {
+    const mod = await loadModule();
+    process.env.CLAWGUARD_BACKEND_URL = "   ";
+    process.env.CLAWGUARD_API_KEY = " ";
+    process.env.CLAWGUARD_AGENT_ID = "\t";
+
+    const config = mod.__testing.loadConfig({
+      pluginConfig: {
+        backendUrl: "   ",
+        apiKey: "   ",
+        agentId: "",
+      },
+    } as any);
+
+    expect(config).toEqual(DEFAULT_CONFIG);
   });
 });
 
@@ -380,9 +520,9 @@ describe("index register edge cases", () => {
     expect(api.on).not.toHaveBeenCalled();
   });
 
-  it("logs debug details and warns when runtime events are unavailable", async () => {
+  it("warns when runtime events are unavailable and stays inactive", async () => {
     const mod = await loadModule();
-    const debug = vi.fn();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     vi.spyOn(globalThis, "setInterval").mockImplementation(
       (() => ({ unref: vi.fn() } as unknown as ReturnType<typeof setInterval>)) as typeof setInterval,
@@ -390,12 +530,194 @@ describe("index register edge cases", () => {
 
     mod.default.register({
       pluginConfig: { apiKey: "plugin-key", agentId: "plugin-agent", backendUrl: "http://localhost:8000" },
-      logger: { debug },
+      logger: { debug: vi.fn() },
       runtime: {},
     } as any);
 
-    expect(debug).toHaveBeenCalledWith(expect.stringContaining("plugin-agent"));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("runtime.events not available"));
+    expect(logSpy).not.toHaveBeenCalledWith("[clawguard] Monitoring active");
+  });
+
+  it("stays inactive until the config entry is explicitly enabled", async () => {
+    const mod = await loadModule();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(globalThis, "setInterval").mockImplementation(
+      (() => ({ unref: vi.fn() } as unknown as ReturnType<typeof setInterval>)) as typeof setInterval,
+    );
+
+    mod.default.register({
+      pluginConfig: { apiKey: "plugin-key", agentId: "plugin-agent", backendUrl: "http://localhost:8000" },
+      config: {
+        plugins: {
+          entries: {
+            "clawguard-monitor": {},
+          },
+        },
+      },
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn(),
+          onAgentEvent: vi.fn(),
+        },
+      },
+    } as any);
+
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("not explicitly enabled"));
+    expect(logSpy).not.toHaveBeenCalledWith("[clawguard] Monitoring active");
+  });
+
+  it("accepts the explicit enabled flag from the full config snapshot", async () => {
+    const debug = vi.fn();
+
+    await registerWithRuntime({
+      config: {
+        plugins: {
+          entries: {
+            "clawguard-monitor": {
+              enabled: true,
+            },
+          },
+        },
+      },
+      logger: { debug },
+    });
+
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining("backend: http://localhost:8000, agent: plugin-agent"),
+    );
+  });
+
+  it("logs debug details when monitoring starts successfully", async () => {
+    const debug = vi.fn();
+
+    await registerWithRuntime({
+      logger: { debug },
+    });
+
+    expect(debug).toHaveBeenCalledWith(
+      expect.stringContaining("backend: http://localhost:8000, agent: plugin-agent"),
+    );
+  });
+
+  it("registers compatibility hooks and emits events when those hooks fire", async () => {
+    const { api } = await registerWithRuntime();
+    const onMock = api.on as { mock: { calls: Array<[string, Function]> } };
+    const hookHandlers = Object.fromEntries(
+      onMock.mock.calls.map(([name, handler]) => [name, handler]),
+    ) as Record<string, Function>;
+
+    expect(hookHandlers.before_tool_call).toBeTypeOf("function");
+    expect(hookHandlers.after_tool_call).toBeTypeOf("function");
+    expect(hookHandlers.message_sent).toBeTypeOf("function");
+    expect(hookHandlers.session_end).toBeTypeOf("function");
+
+    hookHandlers.before_tool_call({
+      sessionKey: "hook-session",
+      tool: "exec",
+      args: { command: "Remove-Item temp.txt" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    hookHandlers.after_tool_call({
+      sessionKey: "hook-session",
+      tool: "exec",
+      result: "ok",
+    });
+    hookHandlers.message_sent({
+      sessionKey: "hook-session",
+      message: "sk-abc123def456ghi789jkl012mno",
+      channel: "agent",
+    });
+    hookHandlers.session_end({ sessionKey: "hook-session" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mockFetch.mock.calls.some(([url]) => typeof url === "string" && url.endsWith("/v1/sessions/start"))).toBe(true);
+    expect(mockFetch.mock.calls.some(([url]) => typeof url === "string" && url.endsWith("/v1/sessions/end"))).toBe(true);
+
+    const eventBodies = mockFetch.mock.calls
+      .filter(([url]) => typeof url === "string" && url.endsWith("/v1/events"))
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string));
+
+    expect(eventBodies).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          event_type: "tool_call",
+        }),
+        expect.objectContaining({
+          event_type: "action",
+          risk_flags: expect.arrayContaining(["sensitive_in_response"]),
+        }),
+      ]),
+    );
+  });
+
+  it("deduplicates identical tool calls that arrive through both runtime events and compatibility hooks", async () => {
+    const { api, transcriptCallback } = await registerWithRuntime();
+    const onMock = api.on as { mock: { calls: Array<[string, Function]> } };
+    const hookHandlers = Object.fromEntries(
+      onMock.mock.calls.map(([name, handler]) => [name, handler]),
+    ) as Record<string, Function>;
+
+    transcriptCallback?.({
+      sessionKey: "dup-session",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            name: "exec",
+            arguments: { command: "Remove-Item temp.txt" },
+          },
+        ],
+      },
+    });
+    hookHandlers.before_tool_call({
+      sessionKey: "dup-session",
+      tool: "exec",
+      args: { command: "Remove-Item temp.txt" },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const toolCalls = mockFetch.mock.calls
+      .filter(([url]) => typeof url === "string" && url.endsWith("/v1/events"))
+      .map(([, init]) => JSON.parse((init as RequestInit).body as string))
+      .filter((body) => body.event_type === "tool_call");
+
+    expect(toolCalls).toHaveLength(1);
+  });
+
+  it("disables monitoring and stops the client if startup fails after the client was created", async () => {
+    const mod = await loadModule();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const clientModule = await import("../../openclaw-plugin/src/client.js");
+    const stopSpy = vi.spyOn(clientModule.ClawGuardClient.prototype, "stop").mockRejectedValueOnce(
+      new Error("stop failed"),
+    );
+    vi.spyOn(globalThis, "setInterval").mockImplementation(
+      (() => ({ unref: vi.fn() } as unknown as ReturnType<typeof setInterval>)) as typeof setInterval,
+    );
+    vi.spyOn(process, "on").mockImplementation((() => {
+      throw new Error("signal registration failed");
+    }) as typeof process.on);
+
+    expect(() => mod.default.register({
+      pluginConfig: { apiKey: "plugin-key", agentId: "plugin-agent", backendUrl: "http://localhost:8000" },
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn(),
+          onAgentEvent: vi.fn(),
+        },
+      },
+    } as any)).not.toThrow();
+
+    await Promise.resolve();
+
+    expect(stopSpy).toHaveBeenCalledOnce();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[clawguard] startup error (monitoring disabled, agent unaffected):",
+      "signal registration failed",
+    );
   });
 
   it("tolerates missing transcript and agent event hooks", async () => {
@@ -495,7 +817,7 @@ describe("index register edge cases", () => {
         content: [
           {
             type: "text",
-            text: "Send to user@example.com",
+            text: "Send this secret sk-abc123def456ghi789jkl012mno",
           },
         ],
       },
@@ -503,27 +825,20 @@ describe("index register edge cases", () => {
     signalHandler?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const eventCalls = mockFetch.mock.calls
-      .filter(([url]) => typeof url === "string" && url.endsWith("/v1/events"))
-      .map(([, init]) => JSON.parse((init as RequestInit).body as string));
     const batchCalls = mockFetch.mock.calls
       .filter(([url]) => typeof url === "string" && url.endsWith("/v1/events/batch"))
       .map(([, init]) => JSON.parse((init as RequestInit).body as string));
 
-    expect(eventCalls).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          event_type: "tool_call",
-          data: expect.objectContaining({
-            input_summary: expect.stringContaining("{bad json"),
-          }),
-        }),
-      ]),
-    );
     expect(batchCalls).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           events: expect.arrayContaining([
+            expect.objectContaining({
+              event_type: "tool_call",
+              data: expect.objectContaining({
+                input_summary: expect.stringContaining("{bad json"),
+              }),
+            }),
             expect.objectContaining({
               event_type: "decision",
               data: expect.objectContaining({

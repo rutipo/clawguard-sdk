@@ -24,8 +24,13 @@ describe("Security: Sensitive pattern detection (new patterns)", () => {
   });
 
   it("detects GCP service account JSON", () => {
-    const result = detectSensitiveContent('{"type": "service_account", "project_id": "my-project"}');
+    const result = detectSensitiveContent('{"type": "service_account", "project_id": "my-project", "private_key_id": "abc123"}');
     expect(result).toContain("gcp_service_account");
+  });
+
+  it("ignores bare service account examples without key material", () => {
+    const result = detectSensitiveContent('{"type": "service_account", "project_id": "example-project"}');
+    expect(result).not.toContain("gcp_service_account");
   });
 
   it("detects MSSQL connection strings", () => {

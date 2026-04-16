@@ -42,6 +42,42 @@ describe("register()", () => {
 
     warnSpy.mockRestore();
   });
+
+  it("disables monitoring instead of throwing on invalid startup config", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    delete process.env.CLAWGUARD_BACKEND_URL;
+    delete process.env.CLAWGUARD_AGENT_ID;
+
+    const mod = await import("../../openclaw-plugin/src/index.js");
+
+    const api = {
+      registerHook: vi.fn(),
+      on: vi.fn(),
+      pluginConfig: {
+        apiKey: "test-key",
+        backendUrl: "notaurl",
+      },
+      runtime: {
+        events: {
+          onSessionTranscriptUpdate: vi.fn(),
+          onAgentEvent: vi.fn(),
+        },
+      },
+    };
+
+    expect(() => mod.default.register(api as any)).not.toThrow();
+    expect(warnSpy).toHaveBeenCalledWith(
+      "[clawguard] startup error (monitoring disabled, agent unaffected):",
+      expect.stringContaining("Invalid backend URL"),
+    );
+    expect(logSpy).not.toHaveBeenCalledWith("[clawguard] Monitoring active");
+    expect(mockFetch).not.toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
 });
 
 describe("event-based monitoring (with API key)", () => {

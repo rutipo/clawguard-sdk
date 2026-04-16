@@ -31,8 +31,16 @@ export class ClawGuardClient {
   private flushTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(config: ClawGuardPluginConfig) {
-    this.config = config;
-    this.validateBackendUrl(config.backendUrl);
+    const normalizedBackendUrl = this.normalizeBackendUrl(config.backendUrl);
+    this.validateBackendUrl(normalizedBackendUrl);
+    this.config = {
+      ...config,
+      backendUrl: normalizedBackendUrl,
+    };
+  }
+
+  private normalizeBackendUrl(url: string): string {
+    return url.replace(/\/+$/, "");
   }
 
   /**
@@ -173,9 +181,14 @@ export class ClawGuardClient {
         });
 
         if (!response.ok) {
+          if (response.status === 401) {
+            throw new Error(
+              `ClawGuard API authentication failed on ${path}: ${response.status} ${response.statusText}. Verify the API key configured on this machine and check whether a stale CLAWGUARD_API_KEY environment variable is overriding the plugin config.`,
+            );
+          }
           // Don't include response body — it may contain sensitive data or be attacker-controlled
           throw new Error(
-            `ClawGuard API error: ${response.status} ${response.statusText}`,
+            `ClawGuard API error on ${path}: ${response.status} ${response.statusText}`,
           );
         }
 

@@ -5,32 +5,35 @@
   },
   "configSchema": {
     "type": "object",
-    "additionalProperties": false,
+    "additionalProperties": true,
     "properties": {
       "backendUrl": {
-        "type": "string",
-        "description": "ClawGuard backend URL"
+        "description": "ClawGuard backend URL. Optional if CLAWGUARD_BACKEND_URL is set."
       },
       "apiKey": {
-        "type": "string",
-        "description": "Your ClawGuard API key (starts with cg_)"
+        "description": "ClawGuard API key. Optional if CLAWGUARD_API_KEY is set."
       },
       "agentId": {
-        "type": "string",
-        "description": "Identifier for this agent",
-        "default": "default"
+        "description": "Identifier for this agent. Optional if CLAWGUARD_AGENT_ID is set."
+      },
+      "captureFullIo": {
+        "description": "Capture full tool input/output instead of summaries."
+      },
+      "maxFullIoBytes": {
+        "description": "Maximum bytes captured when full I/O capture is enabled."
       },
       "blockSensitiveAccess": {
-        "type": "boolean",
-        "description": "Block access to sensitive files (.env, credentials, SSH keys)",
-        "default": false
+        "description": "Block access to sensitive files (.env, credentials, SSH keys)."
       },
       "requireApprovalForHighRisk": {
-        "type": "boolean",
-        "description": "Require user approval before potential data exfiltration",
-        "default": false
+        "description": "Require user approval before potential data exfiltration."
+      },
+      "batchSize": {
+        "description": "Number of events to buffer before flushing."
+      },
+      "flushIntervalMs": {
+        "description": "Maximum time in milliseconds before buffered events are flushed."
       }
-    },
-    "required": ["backendUrl", "apiKey"]
+    }
   }
 }

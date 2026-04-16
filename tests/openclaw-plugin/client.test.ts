@@ -79,6 +79,17 @@ describe("ClawGuardClient", () => {
       );
     });
 
+    it("normalizes trailing slashes in backend URLs before making requests", async () => {
+      client = new ClawGuardClient(makeConfig({ backendUrl: "http://localhost:8000///" }));
+
+      await client.sendEventImmediate(makeEvent());
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        "http://localhost:8000/v1/events",
+        expect.anything(),
+      );
+    });
+
     it("warns for public HTTP backend URLs", () => {
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -230,7 +241,9 @@ describe("ClawGuardClient", () => {
 
       await expect(
         client.sendEventImmediate(makeEvent()),
-      ).rejects.toThrow("ClawGuard API error: 401");
+      ).rejects.toThrow(
+        "ClawGuard API authentication failed on /v1/events: 401 Unauthorized. Verify the API key configured on this machine",
+      );
     });
 
     it("retries timeout once for de-duplicated event endpoints", async () => {

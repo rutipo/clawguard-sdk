@@ -1,4 +1,4 @@
-# @clawguard/openclaw-plugin
+# clawguard-monitor
 
 Security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw) agents. Monitors agent activity via OpenClaw's runtime event streams, detects sensitive content, and streams events to the ClawGuard backend for real-time Telegram alerts and thread analysis.
 
@@ -41,34 +41,43 @@ The plugin:
 openclaw plugins install clawhub:clawguard-monitor
 ```
 
-### From npm
-
-```bash
-openclaw plugins install @clawguard/openclaw-plugin
-```
-
-### From source
+### From a local source checkout (unpublished/local testing only)
 
 ```bash
 git clone https://github.com/rutipo/clawguard-plugin.git
 cd clawguard-plugin/openclaw-plugin
-npm install && npm run build
+openclaw plugins install -l .
 ```
 
-Then add the plugin to your OpenClaw config with a local `path` pointing to the `openclaw-plugin` directory (see Configuration below).
+Because `dist/` is checked in, you do not need `npm install` for a user-style local install. Run `npm ci && npm run build` only if you are actively changing the TypeScript source and need to rebuild it.
+
+ClawGuard itself does not rewrite `~/.openclaw/openclaw.json` or try to repair plugin config. OpenClaw may still create or enable the plugin entry during installation, so verify the resulting config after install.
 
 ## Configuration
 
-**Option A: CLI (recommended)**
+Choose one of the following configuration sources. None of them should be written automatically during installation.
+
+If the config is missing, blank, or malformed, ClawGuard stays inactive and logs a warning. It does not rewrite OpenClaw config, self-enable, or try to repair stale entries.
+
+**Option A: Environment variables**
+
+```bash
+export CLAWGUARD_BACKEND_URL=https://your-clawguard-server.com
+export CLAWGUARD_API_KEY=cg_your_api_key_here
+export CLAWGUARD_AGENT_ID=my-research-bot
+```
+
+If OpenClaw is launched from a service manager, put the same variables in that service's environment file instead of rewriting plugin config during install.
+
+**Option B: Explicit OpenClaw config commands**
 
 ```bash
 openclaw config set plugins.entries.clawguard-monitor.config.backendUrl "https://your-clawguard-server.com"
 openclaw config set plugins.entries.clawguard-monitor.config.apiKey "cg_your_api_key_here"
 openclaw config set plugins.entries.clawguard-monitor.config.agentId "my-research-bot"
-openclaw gateway restart
 ```
 
-**Option B: Edit config file**
+**Option C: Edit config file**
 
 Add to your OpenClaw config (`~/.openclaw/openclaw.json` or equivalent):
 
@@ -77,7 +86,7 @@ Add to your OpenClaw config (`~/.openclaw/openclaw.json` or equivalent):
   "plugins": {
     "entries": {
       "clawguard-monitor": {
-        "enabled": true,
+        "enabled": false,
         "config": {
           "backendUrl": "https://your-clawguard-server.com",
           "apiKey": "cg_your_api_key_here",
@@ -89,26 +98,55 @@ Add to your OpenClaw config (`~/.openclaw/openclaw.json` or equivalent):
 }
 ```
 
-**Option C: Environment variables**
+## Verify or change the enabled state
+
+After installation and configuration, check the resulting plugin entry:
 
 ```bash
-export CLAWGUARD_BACKEND_URL=https://your-clawguard-server.com
-export CLAWGUARD_API_KEY=cg_your_api_key_here
-export CLAWGUARD_AGENT_ID=my-research-bot
+openclaw config get plugins.entries.clawguard-monitor
 ```
+
+If you want to enable it explicitly:
+
+```bash
+openclaw config set plugins.entries.clawguard-monitor.enabled true
+openclaw gateway restart
+```
+
+If you edited `openclaw.json` manually and already set `"enabled": true`, you can skip the extra `config set ...enabled true` command.
+
+To disable it again:
+
+```bash
+openclaw config set plugins.entries.clawguard-monitor.enabled false
+openclaw gateway restart
+```
+
+To rotate the API key later, update the environment variable or rerun the explicit `openclaw config set ...apiKey` command. Reinstalling the plugin should never be required just to change secrets.
 
 ### Configuration options
 
 | Option | Env var | Default | Description |
 |--------|---------|---------|-------------|
 | `backendUrl` | `CLAWGUARD_BACKEND_URL` | `http://localhost:8000` | ClawGuard backend URL |
-| `apiKey` | `CLAWGUARD_API_KEY` | (required) | API key from `/v1/register` |
+| `apiKey` | `CLAWGUARD_API_KEY` | (required to monitor) | API key from `/v1/register` |
 | `agentId` | `CLAWGUARD_AGENT_ID` | `openclaw-agent` | Identifier for this agent |
 | `captureFullIo` | - | `false` | Capture full tool input/output (up to 50KB) |
+| `maxFullIoBytes` | - | `50000` | Maximum full I/O bytes when `captureFullIo` is enabled |
 | `blockSensitiveAccess` | - | `false` | Block tool calls to sensitive files |
 | `requireApprovalForHighRisk` | - | `false` | Require user approval for potential exfiltration |
 | `batchSize` | - | `10` | Events buffered before sending |
 | `flushIntervalMs` | - | `5000` | Max time before flushing event buffer |
+
+## Install integrity check
+
+On machines that have OpenClaw installed, you can verify that plugin installation does not mutate `openclaw.json`:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\verify_openclaw_plugin_install_integrity.ps1
+```
+
+That script hashes `~/.openclaw/openclaw.json` before and after `openclaw plugins install -l .` and exits non-zero if the hash changes without an explicit config command.
 
 ## Thread Analysis API
 
