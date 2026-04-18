@@ -1227,9 +1227,11 @@ export function assessToolCall(
 
 export const __testing = {
   classifyTargetPath,
+  joinPathSegments,
   looksLikePlaceholderValue,
   parseStructuredPayload,
   payloadLooksLikeReadQuery,
+  requestPayloadLooksLikeReadQuery,
   requestLooksLikeExternalReadQuery,
   requestPayloadLooksLikeSearch,
   requestLooksLikeWebSearch,

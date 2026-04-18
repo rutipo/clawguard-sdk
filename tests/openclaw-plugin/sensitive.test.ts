@@ -133,7 +133,9 @@ describe("isSensitivePath", () => {
 
 describe("classifyTargetPath", () => {
   it("distinguishes ordinary workspace files from memory, config, and risky write surfaces", () => {
+    expect(sensitiveTesting.classifyTargetPath("")).toBe("unknown");
     expect(sensitiveTesting.classifyTargetPath("/repo/docs/notes.md")).toBe("workspace_file");
+    expect(sensitiveTesting.classifyTargetPath("/repo/src/index.ts")).toBe("workspace_file");
     expect(sensitiveTesting.classifyTargetPath("/repo/.claude/CLAUDE.md")).toBe("memory_file");
     expect(sensitiveTesting.classifyTargetPath("/repo/package.json")).toBe("local_config");
     expect(sensitiveTesting.classifyTargetPath("/repo/.github/workflows/deploy.yml")).toBe("execution_surface");
@@ -209,8 +211,15 @@ describe("shell command helpers", () => {
     expect(extractTargetFromCommand("Get-Content -Path \"C:\\repo\\.env\"")).toBe("C:\\repo\\.env");
     expect(extractTargetFromCommand("curl https://example.com/docs")).toBe("https://example.com/docs");
     expect(extractTargetFromCommand("New-Item -Path .\\.claude -Name settings.json -ItemType File")).toBe(".\\.claude\\settings.json");
+    expect(extractTargetFromCommand("New-Item notes.md -ItemType File")).toBe("notes.md");
     expect(extractTargetFromCommand("echo note > .\\memory\\debugging.md")).toBe(".\\memory\\debugging.md");
     expect(extractTargetFromCommand("tee .\\docs\\notes.md")).toBe(".\\docs\\notes.md");
+  });
+
+  it("exposes path-join helper edge cases through testing exports", () => {
+    expect(sensitiveTesting.joinPathSegments("", "settings.json")).toBe("settings.json");
+    expect(sensitiveTesting.joinPathSegments(".\\.claude", "")).toBe(".\\.claude");
+    expect(sensitiveTesting.joinPathSegments(".\\.claude", "C:\\temp\\notes.md")).toBe("C:\\temp\\notes.md");
   });
 
   it("distinguishes high-impact secrets from low-signal pii", () => {
@@ -299,6 +308,10 @@ describe("shell command helpers", () => {
       isHighRisk: true,
       operationKind: "system_persistence_write",
       severity: "high",
+    });
+    expect(assessToolCall("write_file", { path: ".env" })).toMatchObject({
+      isHighRisk: false,
+      operationKind: "secret_store_write",
     });
   });
 
@@ -445,12 +458,24 @@ describe("shell command helpers", () => {
     expect(sensitiveTesting.looksLikePlaceholderValue("\"\"")).toBe(true);
     expect(sensitiveTesting.parseStructuredPayload("{bad json}")).toBeUndefined();
     expect(sensitiveTesting.requestPayloadLooksLikeSearch(undefined)).toBe(false);
+    expect(sensitiveTesting.requestPayloadLooksLikeReadQuery(undefined)).toBe(false);
     expect(sensitiveTesting.requestPayloadLooksLikeSearch({
       body: "q=latest+pricing",
     })).toBe(true);
     expect(sensitiveTesting.payloadLooksLikeReadQuery({
       query: "query { viewer { login } }",
       variables: { first: 5 },
+    })).toBe(true);
+    expect(sensitiveTesting.payloadLooksLikeReadQuery({
+      query: "mutation { deleteRepo(id: 1) }",
+      variables: { first: 5 },
+    })).toBe(false);
+    expect(sensitiveTesting.requestPayloadLooksLikeReadQuery({
+      body: "{\"query\":\"query { viewer { login } }\"}",
+    })).toBe(true);
+    expect(sensitiveTesting.requestLooksLikeExternalReadQuery("http_request", {
+      method: "POST",
+      query: "recent docs",
     })).toBe(true);
     expect(sensitiveTesting.requestLooksLikeExternalReadQuery("http_request", {
       method: "POST",
