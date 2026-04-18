@@ -420,14 +420,53 @@ describe("shell command helpers", () => {
       title: "File upload",
     });
     expect(assessToolCall("send_message")).toMatchObject({
-      isHighRisk: true,
+      isHighRisk: false,
       toolCategory: "communication",
-      operationKind: "send_message",
-      title: "External message send",
+      operationKind: "trusted_delivery",
+      deliveryScope: "first_party",
     });
     expect(assessToolCall("write_file")).toMatchObject({
       isHighRisk: false,
       operationKind: "file_write",
+    });
+  });
+
+  it("treats first-party chat delivery as normal but keeps external message sends risky", () => {
+    expect(assessToolCall("send_message", {
+      channel: "telegram",
+      chat_id: "12345",
+      content: "Daily summary ready",
+    })).toMatchObject({
+      isHighRisk: false,
+      operationKind: "trusted_delivery",
+      deliveryScope: "first_party",
+      channelType: "telegram",
+    });
+    expect(assessToolCall("send_message", {
+      platform: "discord",
+      channel_id: "987654321",
+      message: "Build completed",
+    })).toMatchObject({
+      isHighRisk: false,
+      operationKind: "trusted_delivery",
+      deliveryScope: "first_party",
+      channelType: "discord",
+    });
+    expect(assessToolCall("send_message", {
+      webhook: "https://hooks.example.com/notify",
+      content: "Deploy now",
+    })).toMatchObject({
+      isHighRisk: true,
+      operationKind: "send_message",
+      deliveryScope: "external",
+    });
+    expect(assessToolCall("send_message", {
+      recipient: "ops@example.com",
+      content: "Status update",
+    })).toMatchObject({
+      isHighRisk: true,
+      operationKind: "send_message",
+      deliveryScope: "external",
     });
   });
 

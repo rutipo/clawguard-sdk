@@ -455,10 +455,35 @@ async function handleToolCall(ctx: HookContext): Promise<void> {
     (toolArgs.file as string) ||
     (toolArgs.filename as string) ||
     (toolArgs.target as string) ||
+    (toolArgs.destination as string) ||
+    (toolArgs.dest as string) ||
+    (toolArgs.recipient as string) ||
+    (toolArgs.to as string) ||
+    (toolArgs.channel as string) ||
+    (toolArgs.chat_id as string) ||
+    (toolArgs.chatId as string) ||
+    (toolArgs.channel_id as string) ||
+    (toolArgs.channelId as string) ||
+    (toolArgs.thread_id as string) ||
+    (toolArgs.threadId as string) ||
+    (toolArgs.message_thread_id as string) ||
+    (toolArgs.messageThreadId as string) ||
+    (toolArgs.conversation_id as string) ||
+    (toolArgs.conversationId as string) ||
+    (toolArgs.room as string) ||
+    (toolArgs.room_id as string) ||
+    (toolArgs.roomId as string) ||
+    (toolArgs.user_id as string) ||
+    (toolArgs.userId as string) ||
+    (toolArgs.phone as string) ||
+    (toolArgs.phone_number as string) ||
+    (toolArgs.phoneNumber as string) ||
     (toolArgs.url as string) ||
     (toolArgs.uri as string) ||
     (toolArgs.endpoint as string) ||
     (toolArgs.href as string) ||
+    (toolArgs.webhook as string) ||
+    (toolArgs.webhookUrl as string) ||
     "";
   const commandText = extractCommandText(toolArgs);
   const inferredTarget = explicitPathArg || extractTargetFromCommand(commandText);
@@ -495,6 +520,14 @@ async function handleToolCall(ctx: HookContext): Promise<void> {
     tool_category: assessment.toolCategory,
     operation_kind: assessment.operationKind,
   };
+
+  if (assessment.deliveryScope) {
+    data.delivery_scope = assessment.deliveryScope;
+  }
+
+  if (assessment.channelType) {
+    data.channel_type = assessment.channelType;
+  }
 
   if (pluginConfig.captureFullIo) {
     data.full_input = truncate(inputStr, pluginConfig.maxFullIoBytes);
@@ -621,7 +654,9 @@ async function handleMessage(ctx: HookContext): Promise<void> {
   }
 
   const data: Record<string, unknown> = {
-    direction: "outbound",
+    operation_kind: "trusted_delivery",
+    delivery_scope: "first_party",
+    channel_type: channel,
     channel,
     content_preview: truncate(message, 200),
     content_length: message.length,

@@ -178,6 +178,28 @@ describe("index __testing helpers", () => {
     expect(client.sendEventImmediate).not.toHaveBeenCalled();
   });
 
+  it("handleToolCall treats first-party chat delivery as benign workflow activity", async () => {
+    const mod = await loadModule();
+    const client = makeMockClient();
+    mod.__testing.setStateForTests({ client: client as any, pluginConfig: makeConfig() });
+    mod.__testing.sessions.set("sess-key", makeSession());
+
+    await mod.__testing.handleToolCall({
+      sessionKey: "sess-key",
+      tool: "send_message",
+      args: { channel: "telegram", chat_id: "12345", message: "Update complete" },
+    });
+
+    expect(client.queueEvent).toHaveBeenCalledOnce();
+    expect(client.sendEventImmediate).not.toHaveBeenCalled();
+    const event = client.queueEvent.mock.calls[0][0];
+    expect(event.data.operation_kind).toBe("trusted_delivery");
+    expect(event.data.delivery_scope).toBe("first_party");
+    expect(event.data.channel_type).toBe("telegram");
+    expect(event.data.target).toBe("telegram");
+    expect(event.data.direction).toBeUndefined();
+  });
+
   it("handleToolCall treats read-only http requests as normal activity", async () => {
     const mod = await loadModule();
     const client = makeMockClient();
@@ -339,6 +361,12 @@ describe("index __testing helpers", () => {
 
     expect(client.queueEvent).toHaveBeenCalledTimes(2);
     expect(client.sendEventImmediate).toHaveBeenCalledOnce();
+    expect(client.queueEvent.mock.calls[0][0].data).toMatchObject({
+      operation_kind: "trusted_delivery",
+      delivery_scope: "first_party",
+      channel_type: "agent",
+    });
+    expect(client.queueEvent.mock.calls[0][0].data.direction).toBeUndefined();
     expect(client.sendEventImmediate.mock.calls[0][0].risk_flags).toContain("sensitive_in_response");
   });
 

@@ -17,6 +17,8 @@ export interface ToolRiskAssessment {
   canEgressData: boolean;
   severity?: "medium" | "high";
   title?: string;
+  deliveryScope?: "first_party" | "external";
+  channelType?: string;
 }
 
 const SENSITIVE_PATTERNS: SensitivePattern[] = [
@@ -272,6 +274,31 @@ const DATA_EGRESS_TOOLS = new Set([
   "send_message",
   "upload_file",
 ]);
+
+const CHAT_CHANNEL_HINTS = [
+  "agent",
+  "chat",
+  "conversation",
+  "telegram",
+  "discord",
+  "whatsapp",
+  "slack",
+  "dm",
+  "direct",
+  "private",
+  "reply",
+  "thread",
+];
+
+const EXTERNAL_DESTINATION_HINTS = [
+  "webhook",
+  "broadcast",
+  "announcement",
+  "public",
+  "publish",
+  "forum",
+  "feed",
+];
 
 const SEARCH_HINTS = [
   "search",
@@ -670,6 +697,216 @@ function extractStringArg(
     }
   }
   return undefined;
+}
+
+function extractCommunicationTarget(args?: Record<string, unknown>): string {
+  return extractStringArg(args, [
+    "target",
+    "destination",
+    "dest",
+    "recipient",
+    "to",
+    "channel",
+    "chat_id",
+    "chatId",
+    "channel_id",
+    "channelId",
+    "thread_id",
+    "threadId",
+    "message_thread_id",
+    "messageThreadId",
+    "conversation_id",
+    "conversationId",
+    "room",
+    "room_id",
+    "roomId",
+    "user_id",
+    "userId",
+    "phone",
+    "phone_number",
+    "phoneNumber",
+    "url",
+    "uri",
+    "endpoint",
+    "href",
+    "webhook",
+    "webhookUrl",
+  ]) ?? "";
+}
+
+function inferChannelType(args?: Record<string, unknown>): string {
+  const channelHints = [
+    extractStringArg(args, ["channel", "platform", "service", "provider", "transport"]),
+    extractCommunicationTarget(args),
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.toLowerCase());
+
+  for (const hint of channelHints) {
+    if (hint.includes("telegram")) return "telegram";
+    if (hint.includes("discord")) return "discord";
+    if (hint.includes("whatsapp")) return "whatsapp";
+    if (hint.includes("slack")) return "slack";
+    if (hint.includes("email")) return "email";
+    if (/^\+?\d[\d\s\-().]{6,}$/.test(hint)) return "whatsapp";
+  }
+
+  return "chat";
+}
+
+function messageHasAttachment(args?: Record<string, unknown>): boolean {
+  if (!args) {
+    return false;
+  }
+
+  for (const key of ["file", "files", "attachment", "attachments", "upload", "document", "documents"]) {
+    const value = args[key];
+    if (value !== undefined && value !== null && value !== "") {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function looksLikeExternalDestination(args?: Record<string, unknown>): boolean {
+  const target = extractCommunicationTarget(args);
+  if (!target) {
+    return false;
+  }
+
+  const normalized = target.toLowerCase();
+  if (/^https?:\/\//.test(normalized)) {
+    return true;
+  }
+
+  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) {
+    return true;
+  }
+
+  return EXTERNAL_DESTINATION_HINTS.some((hint) => normalized.includes(hint));
+}
+
+function looksLikeTrustedChatDelivery(args?: Record<string, unknown>): boolean {
+  if (!args) {
+    return true;
+  }
+
+  if (looksLikeExternalDestination(args) || messageHasAttachment(args)) {
+    return false;
+  }
+
+  const explicitChannel = extractStringArg(args, ["channel", "platform", "service", "provider", "transport"]) ?? "";
+  const target = extractCommunicationTarget(args);
+  const combined = `${explicitChannel} ${target}`.toLowerCase();
+
+  if (CHAT_CHANNEL_HINTS.some((hint) => combined.includes(hint))) {
+    return true;
+  }
+
+  if (
+    args.chat_id !== undefined
+    || args.chatId !== undefined
+    || args.channel_id !== undefined
+    || args.channelId !== undefined
+    || args.thread_id !== undefined
+    || args.threadId !== undefined
+    || args.message_thread_id !== undefined
+    || args.messageThreadId !== undefined
+    || args.conversation_id !== undefined
+    || args.conversationId !== undefined
+    || args.room !== undefined
+    || args.room_id !== undefined
+    || args.roomId !== undefined
+    || args.user_id !== undefined
+    || args.userId !== undefined
+    || args.phone !== undefined
+    || args.phone_number !== undefined
+    || args.phoneNumber !== undefined
+  ) {
+    return true;
+  }
+
+  return !target;
+}
+
+function assessDataEgressTool(
+  toolName: string,
+  args?: Record<string, unknown>,
+): ToolRiskAssessment {
+  if (toolName === "upload_file") {
+    return {
+      toolCategory: "filesystem",
+      operationKind: "upload_file",
+      isHighRisk: true,
+      canEgressData: true,
+      severity: "high",
+      title: "File upload",
+      deliveryScope: "external",
+      channelType: "file_transfer",
+    };
+  }
+
+  if (toolName === "send_email") {
+    return {
+      toolCategory: "communication",
+      operationKind: "send_email",
+      isHighRisk: true,
+      canEgressData: true,
+      severity: "high",
+      title: "External email send",
+      deliveryScope: "external",
+      channelType: "email",
+    };
+  }
+
+  if (messageHasAttachment(args)) {
+    return {
+      toolCategory: "communication",
+      operationKind: "send_message",
+      isHighRisk: true,
+      canEgressData: true,
+      severity: "high",
+      title: "Message send with attachment",
+      deliveryScope: "external",
+      channelType: inferChannelType(args),
+    };
+  }
+
+  if (looksLikeExternalDestination(args)) {
+    return {
+      toolCategory: "communication",
+      operationKind: "send_message",
+      isHighRisk: true,
+      canEgressData: true,
+      severity: "high",
+      title: "External message send",
+      deliveryScope: "external",
+      channelType: inferChannelType(args),
+    };
+  }
+
+  if (looksLikeTrustedChatDelivery(args)) {
+    return {
+      toolCategory: "communication",
+      operationKind: "trusted_delivery",
+      isHighRisk: false,
+      canEgressData: false,
+      deliveryScope: "first_party",
+      channelType: inferChannelType(args),
+    };
+  }
+
+  return {
+    toolCategory: "communication",
+    operationKind: "send_message",
+    isHighRisk: true,
+    canEgressData: true,
+    severity: "medium",
+    title: "Unclassified message send",
+    deliveryScope: "external",
+    channelType: inferChannelType(args),
+  };
 }
 
 export function extractTargetFromCommand(command: string): string {
@@ -1172,14 +1409,7 @@ export function assessToolCall(
   const normalizedTool = toolName.toLowerCase();
 
   if (DATA_EGRESS_TOOLS.has(normalizedTool)) {
-    return {
-      toolCategory: normalizedTool === "upload_file" ? "filesystem" : "communication",
-      operationKind: normalizedTool,
-      isHighRisk: true,
-      canEgressData: true,
-      severity: "high",
-      title: normalizedTool === "upload_file" ? "File upload" : "External message send",
-    };
+    return assessDataEgressTool(normalizedTool, args);
   }
 
   if (HTTP_LIKE_TOOLS.has(normalizedTool)) {
